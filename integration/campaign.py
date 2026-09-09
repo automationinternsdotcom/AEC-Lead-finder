@@ -104,9 +104,9 @@ def load_campaign(path: str | Path, settings: Settings) -> CampaignManifest:
         raise ActivationBlocked("EMAIL_TEMPLATES_APPROVED is not enabled")
     if not settings.postal_address:
         raise ActivationBlocked("AETHER_POSTAL_ADDRESS is required")
-    if not settings.signature_logo_url.startswith("https://"):
+    if SIGNATURE_LOGO_PLACEHOLDER in serialized and not settings.signature_logo_url.startswith("https://"):
         raise ActivationBlocked(
-            "PUBLIC_BASE_URL (HTTPS) is required for signature logo"
+            "AETHER_SIGNATURE_LOGO_URL or PUBLIC_BASE_URL must be HTTPS when a logo placeholder is used"
         )
     for index, step in enumerate(raw.get("steps") or []):
         if "{{AETHER_POSTAL_ADDRESS}}" not in str(
@@ -114,10 +114,6 @@ def load_campaign(path: str | Path, settings: Settings) -> CampaignManifest:
         ) or "{{AETHER_POSTAL_ADDRESS}}" not in str(step.get("bodyText") or ""):
             raise ActivationBlocked(
                 f"step {index} is missing the postal-address placeholder"
-            )
-        if SIGNATURE_LOGO_PLACEHOLDER not in str(step.get("bodyHtml") or ""):
-            raise ActivationBlocked(
-                f"step {index} is missing the signature-logo placeholder"
             )
     raw = _replace(raw, "{{AETHER_POSTAL_ADDRESS}}", settings.postal_address)
     raw = _replace(raw, SIGNATURE_LOGO_PLACEHOLDER, settings.signature_logo_url)

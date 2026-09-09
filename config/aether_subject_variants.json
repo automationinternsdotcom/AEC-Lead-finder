@@ -1,0 +1,10 @@
+{
+  "campaign_id": "92fc58e2-d68f-4c3d-878f-158f89dde5df",
+  "steps": [{
+    "step_index": 0,
+    "variants": [
+      {"label": "A", "weight": 50, "subject": "{{firstName}}, could we stay in touch about janitorial needs for {{custom.projectPropertyName}}?"},
+      {"label": "B", "weight": 50, "subject": "{{firstName}}, open to staying in touch about janitorial needs for {{custom.projectPropertyName}}?"}
+    ]
+  }]
+}

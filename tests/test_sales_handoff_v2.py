@@ -798,6 +798,22 @@ def test_live_campaign_validation_rejects_present_mailbox_mismatch(tmp_path):
         )
 
 
+@pytest.mark.parametrize("status", ["draft", "running"])
+def test_variant_observation_gap_preserves_draft_ingestion_but_blocks_sending(tmp_path, status):
+    from integration.variants import load_plan
+    campaign = _campaign()
+    campaign.update(id=load_plan().campaign_id, status=status)
+    settings = replace(_activation_settings(campaign), warmy_campaign_id=campaign["id"], campaign_start_enabled=True)
+    workflows = SalesWorkflows(settings, Database(tmp_path / "variants.sqlite"),
+                              warmy=FakeWarmy(campaign=campaign), pipedrive=FakePipedrive())
+    if status == "draft":
+        result = workflows._validate_live_campaign({"data": campaign}, for_enrollment=True)
+        assert result["subject_variants"]["status"] == "not_verified"
+    else:
+        with pytest.raises(ActivationBlocked, match="Variant-capable read required"):
+            workflows._validate_live_campaign({"data": campaign}, for_enrollment=True)
+
+
 def test_typed_sequence_reply_forwards_original_message_to_jordan(tmp_path):
     db = Database(tmp_path / "sales.sqlite")
     _seed(db)

@@ -29,7 +29,7 @@ def test_low_role_is_selection_preference_unless_it_is_the_only_address():
     assert alternative.selection_blocks == ("recipient_role_score_below_70",)
 
 
-def test_current_employer_match_ranks_ahead_of_higher_role_mismatch():
+def test_eligible_fallback_ranks_ahead_of_role_blocked_current_employer():
     current = candidate_rank_key(
         current_employer=True,
         role_score=50,
@@ -49,4 +49,12 @@ def test_current_employer_match_ranks_ahead_of_higher_role_mismatch():
         stable_id="former",
     )
 
-    assert current < former
+    assert former < current
+    assert assess_recipient(verification_status="verified", role_score=100,
+                            primary=True, alternative_email_count=2).eligible
+
+
+def test_current_employer_preference_remains_within_eligible_candidates():
+    common = dict(role_score=90, local_scope=True, non_fallback_provider=True,
+                  verification_status="unknown", evidence_count=1, stable_id="person")
+    assert candidate_rank_key(current_employer=True, **common) < candidate_rank_key(current_employer=False, **common)

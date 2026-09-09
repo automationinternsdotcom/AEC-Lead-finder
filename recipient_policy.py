@@ -101,7 +101,7 @@ def candidate_rank_key(
     verification_status: str,
     evidence_count: int,
     stable_id: str,
-) -> tuple[int, int, int, int, int, int, str]:
+) -> tuple[int, int, int, int, int, int, int, str]:
     """Sort best-first while retaining every non-invalid candidate."""
 
     employer_rank = 2 if current_employer is True else 1 if current_employer is None else 0
@@ -112,6 +112,7 @@ def candidate_rank_key(
         "unknown": 1,
     }.get(str(verification_status or "").casefold(), 0)
     return (
+        -int(role_score >= 70),
         -employer_rank,
         -int(role_score),
         -int(local_scope),

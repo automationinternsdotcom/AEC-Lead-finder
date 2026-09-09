@@ -1603,6 +1603,14 @@ class SalesWorkflows:
         actual_hash = campaign_manifest_hash(hash_payload)
         if actual_hash != self.settings.warmy_campaign_manifest_hash:
             errors.append("campaign manifest hash mismatch")
+        from .variants import verification_status
+        variants = verification_status(self.db, self.settings.warmy_campaign_id, actual_hash)
+        if variants["status"] != "not_configured":
+            mailbox_verification["subject_variants"] = variants
+            # Inert drafts can receive leads without claiming their A/B state
+            # was verified. A sending campaign must have a fresh observation.
+            if status != "draft" and variants["status"] != "verified":
+                errors.append(variants["reason"])
         if errors:
             raise ActivationBlocked("live Warmy campaign blocked: " + ", ".join(errors))
         return mailbox_verification

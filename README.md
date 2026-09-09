@@ -304,11 +304,14 @@ release an older backlog accidentally.
 
 WarmySender campaign templates are not updated by git alone. The existing Aether
 draft has separately managed 50/50 A/B subjects recorded in
-`config/daily_campaign_fingerprint.json`. The YAML contains the initial A subject
+`config/aether_subject_variants.json`. The YAML contains the initial A subject
 and threaded follow-ups, not a full export of live variant state. The update CLI
 refuses to overwrite this pinned campaign because its API cannot preserve or
 verify the variants. Use a variant-capable edit surface and re-verify the daily
 fingerprint after any approved live change; merging code does not deploy templates.
+See [variant verification](docs/campaign-variant-verification.md) for the full
+approval hash and source-backed observation workflow. Missing A/B read capability
+does not exclude contacts from inert drafts, but must not be reported as verified.
 
 For other draft/paused campaigns without separately managed variants, after changing
 `config/aether_campaign.yaml`, patch the configured draft or paused campaign and

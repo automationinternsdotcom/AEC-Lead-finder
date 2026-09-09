@@ -79,6 +79,7 @@ class Settings:
     database_path: str = "aether_sales.sqlite"
     environment: str = "development"
     public_base_url: str = "http://localhost:8187"
+    signature_logo_override: str = ""
     log_level: str = "INFO"
 
     provider_writes_enabled: bool = False
@@ -123,7 +124,7 @@ class Settings:
 
     @property
     def signature_logo_url(self) -> str:
-        return f"{self.public_base_url}/assets/aether-signature-logo.png"
+        return self.signature_logo_override or f"{self.public_base_url.rstrip('/')}/assets/aether-signature-logo.png"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -139,6 +140,7 @@ class Settings:
             if value.strip()
         )
         return cls(
+            signature_logo_override=os.environ.get("AETHER_SIGNATURE_LOGO_URL", "").strip(),
             database_path=os.environ.get("AETHER_SALES_DB_PATH", "aether_sales.sqlite"),
             environment=os.environ.get("AETHER_ENVIRONMENT", "development"),
             public_base_url=os.environ.get(

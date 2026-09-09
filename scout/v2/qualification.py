@@ -36,8 +36,8 @@ ModelCall = Callable[[str, str, list[dict]], tuple[str, dict]]
 
 
 LEAD_GUIDANCE = """Qualifying triggers include a specific Arizona commercial property opening, lease-up, tenant relocation, ownership acquisition by the buyer/new owner, construction start, completion, approved development, permit, rezoning, expansion, renovation, redevelopment, or other property-level operational change.
-Reject macro market reports, opinion columns, broker/vendor awards, generic company news, seller-only listings, financing without a named property use, out-of-state projects, residential-only single-family work, and articles where the property/operator cannot be identified.
-Choose business_name as the entity most likely to buy or influence facilities services: operator, tenant, owner, property manager, developer, or community/asset name. Do not use the publisher, broker, seller, architect, or contractor unless that entity is the operator/owner/manager.
+Reject only affirmative non-opportunities: macro market reports, opinion columns, broker/vendor awards, generic company news without a specific property trigger, out-of-state projects, and residential-only single-family work. Missing identity is not a rejection: retain a named Arizona property/project while researching its operator. If neither an entity nor a specific property can be established, return an uncertainty reason for review, not a definitive non-opportunity.
+Choose business_name as the sourced operator, tenant, owner, property manager, developer, or community/asset name. A broker, seller, architect, or contractor may be retained as a referral or construction-closeout contact for a specific property event; do not relabel them as the owner/operator. Listings and financing with a specific property trigger can support owner research. Never use the publisher as the prospect merely because it published the article.
 service_angle must name a concrete Aether fit such as recurring janitorial, common-area cleaning, day porter, evening/overnight cleaning, turnover/lease-up support, pressure washing, floor care, or maintenance coordination."""
 
 
@@ -53,7 +53,8 @@ Guidance:
 
 Return strict JSON with these keys:
 qualified, business_name, person, event, date_posted, location, summary, state,
-priority, property_type, service_angle, filter_reason, confidence.
+priority, property_type, service_angle, filter_reason, confidence, identity_uncertain.
+Set identity_uncertain=true when missing property/operator identity is the only obstacle; this is recoverable review, never a definitive rejection.
 
 For an explicit non-qualifying article or an article published outside the requested window, return qualified=false and a nonempty filter_reason. For a qualifying article, date_posted must be the exact article publication date and fall inside the requested window; state must be Arizona, priority must be high or medium, confidence must be high or low, and business_name, event, and location must be nonempty. Use empty strings for unknown optional values. Return no prose."""
 
@@ -66,6 +67,7 @@ Guidance:
 {lead_guidance}
 
 Return strict JSON only as one object mapping every exact candidate_id to an object with keys: qualified, business_name, event, date_posted, location, summary, state, priority, property_type, service_angle, filter_reason, confidence. date_posted must be YYYY-MM-DD or an empty string, never a timestamp. Include every submitted ID exactly once and invent no IDs. An explicit rejection or an article outside the requested window requires a specific filter_reason. A qualification requires a date inside the requested window, state Arizona, priority high or medium, confidence high or low, and nonempty business_name, event, and location.
+Also return identity_uncertain=true when missing property/operator identity is the only obstacle. Such results are recoverable review, not definitive rejection. When a project is named, retain that sourced name and qualify the property event without inventing an operator.
 
 Candidates:
 {candidates}"""
@@ -75,6 +77,7 @@ class JudgmentPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     qualified: bool
+    identity_uncertain: bool = False
     business_name: str = ""
     person: str = ""
     event: str = ""
@@ -427,6 +430,12 @@ class QualificationService:
         self, candidate: DiscoveryCandidate, payload: JudgmentPayload
     ) -> tuple[LeadEvent | None, Person | None, ReviewItem | None, str]:
         if not payload.qualified:
+            if payload.identity_uncertain:
+                review = self._quarantine_without_attempt(
+                    candidate, "", ValueError(payload.filter_reason),
+                    reason_code="property_identity_unresolved",
+                )
+                return None, None, review, ""
             self._reject_candidate(candidate, payload.filter_reason)
             self._record_completion(candidate, "rejected")
             return None, None, None, candidate.candidate_id
@@ -554,6 +563,7 @@ class QualificationService:
         candidate: DiscoveryCandidate,
         response_path: str,
         exc: Exception,
+        *, reason_code: str = "model_contract_invalid",
     ) -> ReviewItem:
         error = f"{type(exc).__name__}:{exc}"
         updated = candidate.model_copy(
@@ -571,7 +581,7 @@ class QualificationService:
             stage="qualify",
             record_type="discovery_candidate",
             record_id=candidate.candidate_id,
-            reason_code="model_contract_invalid",
+            reason_code=reason_code,
             validation_errors=[error],
             raw_artifact_path=response_path,
         )

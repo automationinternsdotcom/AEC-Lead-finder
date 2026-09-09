@@ -119,7 +119,8 @@ def ingest(settings: Settings, db: Database, path: Path, *, enroll_draft: bool) 
             campaign = workflows.warmy.get_campaign(settings.warmy_campaign_id)
             if str((campaign.get("data") or campaign).get("status")) != "draft":
                 raise RuntimeError("Campaign is no longer draft; workspace ingestion completed")
-            workflows._validate_live_campaign(campaign, for_enrollment=True)
+            campaign_verification = workflows._validate_live_campaign(campaign, for_enrollment=True)
+            result["campaign_verification"] = campaign_verification
             now = datetime.now(UTC)
             batch = ApprovalBatch(
                 batch_id=f"daily-{handoff.run_id}-{uuid.uuid4().hex[:12]}",
