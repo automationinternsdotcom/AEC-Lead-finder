@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from integration.campaign import campaign_manifest_hash
+from integration.cli import _fallback_address_plan, _sole_email_role_plan
 from integration.config import ActivationBlocked, Settings
 from integration.database import Database
 from integration.handoff import (
@@ -408,8 +409,53 @@ def test_pipedrive_lead_is_created_without_a_person(tmp_path):
     assert db.get_lead_event("event-1")["pipedrive_lead_id"] == "lead-1"
 
 
-@pytest.mark.parametrize("verification", ["invalid", "catch_all", "unknown"])
-def test_standalone_verification_blocks_prospect_creation(tmp_path, verification):
+def test_pipedrive_same_name_does_not_steal_other_company_mapping(tmp_path):
+    db = Database(tmp_path / "sales.sqlite")
+    db.upsert_company(_company())
+    other = _company().model_copy(update={
+        "company_id": "franchisee", "domain": "franchise.example",
+        "aliases": [], "legacy_ids": [],
+    })
+    db.upsert_company(other)
+    db.update_company("franchisee", pipedrive_organization_id=99)
+    db.upsert_lead_event(_event())
+    pipedrive = FakePipedrive()
+    pipedrive.find_organization = lambda name: 99
+    workflows = SalesWorkflows(
+        Settings(provider_writes_enabled=True), db, pipedrive=pipedrive
+    )
+    workflows.sync_lead_event({"lead_event": _event().model_dump(mode="json")})
+    assert db.get_company("franchisee")["pipedrive_organization_id"] == 99
+    assert db.get_company("company-1")["pipedrive_organization_id"] == 101
+    assert pipedrive.created_leads[0][2] == 101
+
+
+def test_invalid_verification_blocks_prospect_creation(tmp_path):
+    db = Database(tmp_path / "sales.sqlite")
+    _seed(db)
+    warmy = FakeWarmy("invalid")
+    workflows = SalesWorkflows(
+        Settings(
+            provider_writes_enabled=True,
+            public_base_url="https://sales.example.com",
+            unsubscribe_secret="secret",
+        ),
+        db,
+        warmy=warmy,
+        pipedrive=FakePipedrive(),
+    )
+    workflows.sync_sequence(
+        {
+            "sequence": _sequence().model_dump(mode="json"),
+            "recipient": _recipient().model_dump(mode="json"),
+        }
+    )
+    assert warmy.calls == [("verify", "jane@acme.example")]
+    assert db.get_sequence("sequence-1")["eligibility_status"] == "blocked"
+
+
+@pytest.mark.parametrize("verification", ["catch_all", "unknown"])
+def test_uncertain_verification_creates_fallback_prospect(tmp_path, verification):
     db = Database(tmp_path / "sales.sqlite")
     _seed(db)
     warmy = FakeWarmy(verification)
@@ -429,8 +475,128 @@ def test_standalone_verification_blocks_prospect_creation(tmp_path, verification
             "recipient": _recipient().model_dump(mode="json"),
         }
     )
-    assert warmy.calls == [("verify", "jane@acme.example")]
+
+    assert warmy.calls == [
+        ("verify", "jane@acme.example"),
+        ("find", "jane@acme.example"),
+        ("create", "jane@acme.example"),
+    ]
+    assert db.get_sequence("sequence-1")["eligibility_status"] == "ready"
+    assert db.get_recipient(recipient_id="recipient-1")["verification_status"] == verification
+
+
+@pytest.mark.parametrize("verification", ["catch_all", "unknown"])
+def test_fallback_reconciliation_only_requeues_unsuppressed_address_blocks(
+    tmp_path, verification
+):
+    db = Database(tmp_path / "sales.sqlite")
+    _seed(db)
+    db.update_recipient("recipient-1", verification_status=verification)
+    db.update_sequence(
+        "sequence-1",
+        eligibility_status="blocked",
+        eligibility_reasons=[f"warmy_verification_{verification}"],
+    )
+
+    plan = _fallback_address_plan(db)
+    assert [item["sequence_id"] for item in plan] == ["sequence-1"]
+    assert plan[0]["sequence"]["eligibility_status"] == "ready"
+    assert plan[0]["sequence"]["eligibility_reasons"] == []
+
+    db.suppress(
+        "jane1@acme.example",
+        "manual",
+        "test",
+    )
+    assert _fallback_address_plan(db) == []
+
+
+def test_fallback_reconciliation_keeps_the_only_low_role_catch_all_address(tmp_path):
+    db = Database(tmp_path / "sales.sqlite")
+    _seed(db)
+    recipient = _recipient().model_copy(update={"role_score": 5})
+    db.upsert_recipient(recipient)
+    db.update_recipient("recipient-1", verification_status="catch_all")
+    db.update_sequence(
+        "sequence-1",
+        eligibility_status="blocked",
+        eligibility_reasons=["warmy_verification_catch_all"],
+    )
+
+    plan = _fallback_address_plan(db)
+    assert [item["sequence_id"] for item in plan] == ["sequence-1"]
+    assert "sole_email_role_fallback" in plan[0]["recipient"]["selection_rationale"]
+
+
+def test_low_role_primary_is_allowed_when_it_is_the_only_found_address(tmp_path):
+    db = Database(tmp_path / "sales.sqlite")
+    _seed(db)
+    recipient = _recipient().model_copy(update={"role_score": 10})
+    db.upsert_recipient(recipient)
+    warmy = FakeWarmy("valid")
+    workflows = SalesWorkflows(
+        Settings(
+            provider_writes_enabled=True,
+            public_base_url="https://sales.example.com",
+            unsubscribe_secret="secret",
+        ),
+        db,
+        warmy=warmy,
+        pipedrive=FakePipedrive(),
+    )
+
+    workflows.sync_sequence(
+        {
+            "sequence": _sequence().model_dump(mode="json"),
+            "recipient": recipient.model_dump(mode="json"),
+        }
+    )
+
+    assert db.get_sequence("sequence-1")["eligibility_status"] == "ready"
+    assert ("create", "jane@acme.example") in warmy.calls
+
+
+def test_low_role_primary_stays_blocked_when_another_address_exists(tmp_path):
+    db = Database(tmp_path / "sales.sqlite")
+    _seed(db, sequence_count=2)
+    recipient = _recipient().model_copy(update={"role_score": 10})
+    db.upsert_recipient(recipient)
+    warmy = FakeWarmy("valid")
+    workflows = SalesWorkflows(
+        Settings(provider_writes_enabled=True),
+        db,
+        warmy=warmy,
+        pipedrive=FakePipedrive(),
+    )
+
+    workflows.sync_sequence(
+        {
+            "sequence": _sequence().model_dump(mode="json"),
+            "recipient": recipient.model_dump(mode="json"),
+        }
+    )
+
     assert db.get_sequence("sequence-1")["eligibility_status"] == "blocked"
+    assert warmy.calls == []
+
+
+def test_role_fallback_reconciliation_requires_one_address_or_passing_score(tmp_path):
+    db = Database(tmp_path / "sales.sqlite")
+    _seed(db)
+    recipient = _recipient().model_copy(update={"role_score": 10})
+    db.upsert_recipient(recipient)
+    db.update_sequence(
+        "sequence-1",
+        eligibility_status="blocked",
+        eligibility_reasons=["recipient_role_score_below_70"],
+    )
+
+    plan = _sole_email_role_plan(db)
+    assert [item["sequence_id"] for item in plan] == ["sequence-1"]
+    assert "sole_email_role_fallback" in plan[0]["recipient"]["selection_rationale"]
+
+    db.upsert_recipient(_recipient("recipient-2", "other@acme.example"))
+    assert _sole_email_role_plan(db) == []
 
 
 def test_mx_precheck_reaches_authoritative_warmy_verification(tmp_path):

@@ -60,10 +60,8 @@ Known domain: {domain}
 Location: {location}
 Date: {today}
 
-Use one research path. Prefer official company/property pages, management pages, press releases, LinkedIn profiles, public filings, broker pages, chambers, and credible local sources.
-Prioritize people with buying authority or influence for cleaning/facilities work: owner, founder, COO, VP/director of operations, regional/property/community manager, asset manager, facilities manager, general manager, or leasing/tenant operations lead. Avoid article authors, brokers, architects, GCs, PR contacts, and sellers unless they are also the operator/owner/manager.
-For each verified person, also return any public professional LinkedIn, email, and phone details found during the same research. Never guess names, titles, emails, or phones. Avoid generic role mailboxes such as info@, leasing@, sales@, support@, and contact@.
-Each person's sources must support the current role and any returned contact fields. Return strict JSON:
+Prefer official company/property pages, management pages, press releases, LinkedIn profiles, public filings, chambers, and credible local sources. Prioritize owner, COO, property/community manager, asset manager, facilities manager, and operations authority. Prefer a sourced direct email; retain a sourced company mailbox when no named contact is reachable, without attributing that mailbox to a person. Article authors, brokers, architects, GCs, PR contacts, and sellers are not automatically the operator: verify their relationship and retain useful referral or closeout routes.
+Use one research path. First verify the exact current organization and its official domain; guard against namesakes, project names, landlords, brokers, affiliates, and former employers. Prefer local or regional authority over facilities, property/asset management, development, leasing, ownership, or operations. HR, recruiting, privacy, safety, and unrelated-region roles are lower-fit signals, not automatic exclusions: retain a sourced reachable person when no stronger contact is found. For each verified person, also return any public professional LinkedIn, email, and phone details found during the same research. Never guess. Each person's sources must support the current role and any returned contact fields. Return strict JSON:
 {{"canonical_domain":"","aliases":[],"decision_makers":[{{"name":"","title":"","scope":"","linkedin":"","email":"","phone":"","sources":[{{"url":"","supports":""}}]}}],"employee_count":{{"value":"","scope":"company|location","as_of":"","confidence":"high|medium|low"}},"sources":[{{"url":"","supports":""}}]}}
 Use an empty decision_makers list and null employee_count when nothing is verified."""
 
@@ -75,7 +73,7 @@ Organization: {organization}
 Known domain: {domain}
 Location: {location}
 
-Find sourced professional LinkedIn, direct professional email, and direct phone details. Search official pages, LinkedIn, credible directories, public filings, press releases, and broker/property pages. Verify the identity and organization; never guess. Do not return generic role mailboxes such as info@, leasing@, sales@, support@, and contact@. Return strict JSON:
+Find sourced professional LinkedIn, email, and phone details. Verify the exact person, current employer, employer domain, relevant division/geography, and relationship to the supplied organization; guard against a namesake or a former-employer address. Prefer a current-employer email. If the only sourced, non-invalid email is on another domain, return it rather than hiding it—the verifier will label it as a fallback and downstream research will keep looking for a better address. Never guess. Return strict JSON:
 {{"name":"{name}","organization":"{organization}","linkedin":"","email":"","phone":"","sources":[{{"url":"","supports":""}}]}}
 Use empty strings when a field cannot be verified."""
 
@@ -319,9 +317,10 @@ class ContactResearchService:
             events_by_org.setdefault(event.organization_id, []).append(event)
         active_event_ids = {event.lead_event_id for event in events}
         person_ids = {person.person_id for person in people}
+        all_run_contacts = self.state.contacts_for_run(self.artifacts.run_id)
         candidates = [
             contact
-            for contact in self.state.contacts_for_run(self.artifacts.run_id)
+            for contact in all_run_contacts
             if contact.lead_event_id in active_event_ids
             and contact.person_id in person_ids
         ]
@@ -329,12 +328,23 @@ class ContactResearchService:
             (contact.lead_event_id, contact.person_id)
             for contact in candidates
             if contact.selected
+            and contact.email
             and contact.verification_status != VerificationStatus.REJECTED
         }
         reviews: list[ReviewItem] = []
+        completed_people = self.state.completed_provider_target_ids(
+            self.artifacts.run_id, "contacts", "person"
+        )
         for person in people:
             organization = org_by_id.get(person.organization_id)
             if not organization:
+                continue
+            if person.person_id in completed_people and not any(
+                c.person_id == person.person_id and c.email
+                and c.verification_status != VerificationStatus.REJECTED for c in all_run_contacts
+            ):
+                # A completed no-email search in this run is still a completed
+                # Grok attempt. A resume proceeds to Treg without repeating it.
                 continue
             person_events = events_by_org.get(person.organization_id, [])
             if person_events and all(

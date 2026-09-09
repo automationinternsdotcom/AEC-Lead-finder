@@ -15,7 +15,9 @@ mailboxIds: []
 steps:
   - stepIndex: 0
     type: email
-    subject: "A facilities idea for {{company}}"
+    subject: "{{firstName}}, could we stay in touch about janitorial needs for {{custom.projectPropertyName}}?"
+    sendAsReply: true
+    quotePreviousMessages: true
     bodyHtml: >-
       <p>{{whyLine}}</p>
       <p>This is a commercial message from Aether Facility Services.</p>
@@ -40,7 +42,9 @@ steps:
     isActive: true
   - stepIndex: 1
     type: email
-    subject: "Following up on facilities support for {{company}}"
+    subject: "" # Inherit the actual initial A/B subject with Re:.
+    sendAsReply: true
+    quotePreviousMessages: true
     bodyHtml: >-
       <p>Hi {{firstName}},</p>
       <p>I wanted to follow up in case my note arrived at a busy time. Aether supports commercial properties with recurring cleaning and on-demand facility services, with one point of contact and work tailored to each site.</p>
@@ -71,7 +75,9 @@ steps:
     isActive: true
   - stepIndex: 2
     type: email
-    subject: "One team for cleaning and facility work"
+    subject: ""
+    sendAsReply: true
+    quotePreviousMessages: true
     bodyHtml: >-
       <p>Hi {{firstName}},</p>
       <p>One reason organizations use Aether is to reduce the handoffs between janitorial, porter, floor, window, pressure-washing, and maintenance vendors. We build the service plan around the property rather than forcing a fixed package.</p>
@@ -102,7 +108,9 @@ steps:
     isActive: true
   - stepIndex: 3
     type: email
-    subject: "Should I close the loop?"
+    subject: ""
+    sendAsReply: true
+    quotePreviousMessages: true
     bodyHtml: >-
       <p>Hi {{firstName}},</p>
       <p>I have not heard back, so I will close the loop after this note. If cleaning or facility support becomes a priority for {{company}}, I would be glad to compare needs and options.</p>

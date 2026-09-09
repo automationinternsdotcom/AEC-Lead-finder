@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scout"))
 
 from v2.artifacts import ArtifactStore  # noqa: E402
 from v2.contracts import (  # noqa: E402
+    ContactCandidate,
     Evidence,
     LeadEvent,
     Organization,
@@ -55,14 +56,59 @@ def test_verifier_rejects_disposable_and_caches_mx(tmp_path):
     assert calls == ["acme.com"]
 
 
-def test_verifier_rejects_generic_role_mailboxes(tmp_path):
+def test_former_employer_address_is_soft_fallback_and_current_domain_wins(tmp_path):
+    store, _, organization, evidence = setup(tmp_path)
+    verifier = ContactVerifier(store, mx_lookup=lambda domain: True)
+
+    former = verifier.verify(
+        email="jane@former-employer.com",
+        organization_domain=organization.domain,
+    )
+    assert former.status == VerificationStatus.UNKNOWN
+    assert former.reason == "email_domain_organization_mismatch_mx_valid"
+
+    candidates = select_best(
+        [
+            ContactCandidate(
+                contact_candidate_id="former",
+                run_id="run-1",
+                lead_event_id="event-1",
+                organization_id=organization.organization_id,
+                person_id="person-1",
+                person_name="Jane Manager",
+                email=former.email,
+                provider="fallback",
+                verification_status=VerificationStatus.VERIFIED,
+                verification_reason="external_email_verifier_valid_organization_mismatch",
+                evidence=evidence,
+            ),
+            ContactCandidate(
+                contact_candidate_id="current",
+                run_id="run-1",
+                lead_event_id="event-1",
+                organization_id=organization.organization_id,
+                person_id="person-1",
+                person_name="Jane Manager",
+                email="jane@acme.com",
+                provider="web",
+                verification_status=VerificationStatus.UNKNOWN,
+                verification_reason="domain_mx_valid_mailbox_unverified",
+                evidence=evidence,
+            ),
+        ]
+    )
+    selected = next(item for item in candidates if item.selected)
+    assert selected.contact_candidate_id == "current"
+
+
+def test_verifier_retains_sourced_generic_role_mailboxes(tmp_path):
     store, _, _, _ = setup(tmp_path)
     verifier = ContactVerifier(store, mx_lookup=lambda domain: True)
 
     result = verifier.verify(email="leasing@acme.com", organization_domain="acme.com")
 
-    assert result.status == VerificationStatus.REJECTED
-    assert result.reason == "email_generic_role_mailbox"
+    assert result.status == VerificationStatus.UNKNOWN
+    assert result.reason == "domain_mx_valid_mailbox_unverified"
 
 
 def test_decision_makers_require_sources_and_persist_people(tmp_path):
@@ -103,8 +149,9 @@ def test_decision_maker_prompt_prioritizes_authority_and_direct_contacts(tmp_pat
     assert "Known domain: acme.com" in prompt
     assert "property/community manager" in prompt
     assert "facilities manager" in prompt
-    assert "Avoid article authors, brokers, architects, GCs" in prompt
-    assert "Avoid generic role mailboxes" in prompt
+    assert "verify their relationship" in prompt
+    assert "retain a sourced company mailbox" in prompt
+    assert "not automatic exclusions" in prompt
 
 
 def test_valid_empty_decision_maker_result_is_terminal(tmp_path):

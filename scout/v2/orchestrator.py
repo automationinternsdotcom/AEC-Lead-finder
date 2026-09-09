@@ -66,6 +66,8 @@ class PipelineOptions:
     phone_webhook: str = ""
     newsapi: bool = False
     apify: bool = False
+    treg_go: bool = False
+    treg_budget_usd: float = 5.0
     grok_model: str = "grok-4.3"
     extractor_model: str = "grok-4.3"
 
@@ -133,6 +135,8 @@ class PipelineRunner:
             "apollo_phones": options.apollo_phones,
             "newsapi": options.newsapi,
             "apify": options.apify,
+            "treg_go": options.treg_go,
+            "treg_budget_usd": options.treg_budget_usd,
             "grok_model": options.grok_model,
             "extractor_model": options.extractor_model,
         }
@@ -654,6 +658,16 @@ class PipelineRunner:
         self.contacts, reviews = service.research(
             self.people, organizations, self.events, attempts=2
         )
+        if self.options.treg_go:
+            from .treg import TregClient, recover_state
+            client = TregClient(Path(self.options.db_path).parent / f"treg-cache-{self.options.stamp[:7]}.sqlite",
+                                budget_usd=self.options.treg_budget_usd)
+            try:
+                self.people, self.contacts = recover_state(
+                    self.state, self.artifacts, organizations, self.people,
+                    self.events, self.contacts, client=client)
+            finally:
+                client.close()
         return {
             "people": len(self.people),
             "candidates": len(self.contacts),

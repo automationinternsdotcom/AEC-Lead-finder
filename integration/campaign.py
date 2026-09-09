@@ -16,7 +16,7 @@ from .config import ActivationBlocked, Settings
 COPY_PLACEHOLDER = "TODO_APPROVED_COPY"
 SIGNATURE_LOGO_PLACEHOLDER = "{{AETHER_SIGNATURE_LOGO_URL}}"
 BODY_MERGE_VARIABLES = {"firstName", "company", "whyLine", "unsubscribeUrl"}
-SUBJECT_MERGE_VARIABLES = {"firstName", "company"}
+SUBJECT_MERGE_VARIABLES = {"firstName", "company", "custom.projectPropertyName"}
 
 
 class CampaignStep(BaseModel):
@@ -24,12 +24,20 @@ class CampaignStep(BaseModel):
 
     stepIndex: int = Field(ge=0)
     type: str = "email"
-    subject: str = Field(min_length=1)
+    subject: str
+    sendAsReply: bool = True
+    quotePreviousMessages: bool = True
     bodyHtml: str = Field(min_length=1)
     bodyText: str = Field(min_length=1)
     delayDays: int = Field(ge=0)
     delayHours: int = Field(default=0, ge=0, le=23)
     isActive: bool = True
+
+    @model_validator(mode="after")
+    def validate_inherited_subject(self):
+        if not self.subject.strip() and (self.stepIndex == 0 or not self.sendAsReply):
+            raise ValueError("blank subject requires a threaded follow-up")
+        return self
 
     @field_validator("type")
     @classmethod
@@ -168,7 +176,7 @@ def _merge_variables(value: str) -> tuple[set[str], bool]:
         if end == -1:
             return variables, True
         inner = value[opening + 2 : end]
-        match = re.fullmatch(r"\s*([A-Za-z][A-Za-z0-9]*)\s*", inner)
+        match = re.fullmatch(r"\s*((?:custom\.)?[A-Za-z][A-Za-z0-9]*)\s*", inner)
         if not match:
             return variables, True
         variables.add(match.group(1))
@@ -212,6 +220,8 @@ def campaign_manifest_hash(value: CampaignManifest | dict[str, Any]) -> str:
         "delayDays",
         "delayHours",
         "isActive",
+        "sendAsReply",
+        "quotePreviousMessages",
     )
     normalized["steps"] = sorted(
         [

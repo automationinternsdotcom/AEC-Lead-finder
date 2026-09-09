@@ -25,6 +25,26 @@ class DedupGroup:
     member_ids: tuple[str, ...]
 
 
+def remove_redundant_groups(groups: Iterable[dict]) -> list[dict]:
+    """Drop repeated/subset groups without inventing any new equivalences.
+
+    Grok can append a singleton already covered by an earlier group. Conflicting
+    overlaps, unknown IDs and missing IDs still fail the normal coverage check.
+    """
+    result = []
+    for group in groups:
+        members = set(group.get("member_ids") or [])
+        if not members or group.get("kept_id") not in members:
+            result.append(group)
+            continue
+        valid = lambda other: bool(other.get("member_ids")) and other.get("kept_id") in other["member_ids"]
+        if any(valid(other) and members <= set(other["member_ids"]) for other in result):
+            continue
+        result = [other for other in result if not (valid(other) and set(other["member_ids"]) < members)]
+        result.append(group)
+    return result
+
+
 def event_fingerprint(organization: str, event: str, location: str, event_date: str = "") -> str:
     return stable_hash(
         normalize_text(organization),
@@ -143,7 +163,7 @@ class FuzzyEventDeduper:
                 response = self.artifacts.write_raw_text(
                     "dedup", f"{attempt_id}-response.txt", text
                 )
-                raw_groups = _parse_group_list(text)
+                raw_groups = remove_redundant_groups(_parse_group_list(text))
                 groups = validate_fuzzy_groups(
                     [event.lead_event_id for event in events], raw_groups
                 )

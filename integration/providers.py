@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.parser import BytesParser
@@ -138,12 +139,18 @@ class WarmyClient:
             "sourceArticle": contact.get("article_url", ""),
             "unsubscribeUrl": contact.get("unsubscribe_url", ""),
             "whyLine": contact.get("why_line", ""),
+            "projectPropertyName": contact.get("project_property_name", ""),
         }
         return {key: value for key, value in values.items() if value not in ("", None)}
 
     def update_prospect(
         self, prospect_id: str, contact: dict[str, Any], operation_key: str
     ) -> dict:
+        """Sync a complete contact snapshot, not an individual custom-field patch.
+
+        Warmy replaces the entire customFields object on PATCH. Callers making
+        targeted corrections must preserve the existing full field dictionary.
+        """
         payload = {
             "firstName": contact.get("first_name", ""),
             "lastName": contact.get("last_name", ""),
@@ -167,6 +174,11 @@ class WarmyClient:
         )
 
     def verify_email(self, email: str, operation_key: str) -> dict:
+        self.settings.require_provider_writes()
+        from .database import Database
+        delay = Database(self.settings.database_path).reserve_provider_slot("warmy.verification", 8.0)
+        if delay:
+            time.sleep(delay)
         return self._request(
             "POST",
             "verification/verify",

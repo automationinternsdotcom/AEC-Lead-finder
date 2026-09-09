@@ -176,6 +176,10 @@ class CompanyProfile(BaseModel):
     organization_ids: list[str] = Field(default_factory=list)
     lead_event_ids: list[str] = Field(default_factory=list)
     anchor_lead_event_id: str
+    relationship_type: str = "unknown"
+    relationship_confidence: str = "low"
+    relationship_sources: list[str] = Field(default_factory=list)
+    outreach_route: str = "review"
     why_line: str = ""
     why_template_key: str = ""
     why_slots: dict[str, str] = Field(default_factory=dict)

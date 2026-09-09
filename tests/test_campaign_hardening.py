@@ -87,6 +87,28 @@ def test_campaign_loader_requires_hosted_signature_logo(tmp_path):
         load_campaign(CAMPAIGN, _settings(public_base_url="http://localhost:8187"))
 
 
+def test_followups_inherit_subject_and_keep_thread_history():
+    manifest = load_campaign(CAMPAIGN, _settings())
+    assert manifest.steps[0].subject
+    assert all(not step.subject and step.sendAsReply and step.quotePreviousMessages
+               for step in manifest.steps[1:])
+
+
+@pytest.mark.parametrize("index,threaded", [(0, True), (1, False)])
+def test_blank_subject_rejected_without_prior_thread(index, threaded):
+    payload = load_campaign(CAMPAIGN, _settings()).model_dump(mode="json")
+    payload["steps"][index].update(subject="", sendAsReply=threaded)
+    with pytest.raises(ValueError, match="blank subject requires a threaded follow-up"):
+        CampaignManifest.model_validate(payload)
+
+
+def test_campaign_fingerprint_detects_threading_drift():
+    payload = load_campaign(CAMPAIGN, _settings()).model_dump(mode="json")
+    before = campaign_manifest_hash(payload)
+    payload["steps"][1]["sendAsReply"] = False
+    assert campaign_manifest_hash(payload) != before
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -115,7 +137,7 @@ def test_campaign_manifest_rejects_duplicate_mailbox_ids():
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ("A facilities idea for {{company}}", "Hello {{whyLine}}"),
+        ("{{custom.projectPropertyName}}", "{{whyLine}}"),
         ("{{whyLine}}", "{{company_name}}"),
         ("{{whyLine}}", "{{company | upper}}"),
         ("{{whyLine}}", "{{company}"),
@@ -188,9 +210,9 @@ def test_create_campaign_draft_versions_idempotency_and_verifies_readback(
 
 
 def test_update_campaign_patches_existing_warmy_campaign_and_verifies_readback(
-    monkeypatch, capsys
+    monkeypatch, capsys, tmp_path
 ):
-    settings = _settings(warmy_campaign_id="campaign-live")
+    settings = _settings(warmy_campaign_id="campaign-live", database_path=str(tmp_path / "sales.sqlite"))
     manifest = load_campaign(CAMPAIGN, settings)
     expected_hash = campaign_manifest_hash(manifest)
 
@@ -242,6 +264,28 @@ def test_update_campaign_patches_existing_warmy_campaign_and_verifies_readback(
         f"aether-campaign-update-v1:campaign-live:{expected_hash}",
     )
     assert warmy.read_id == "campaign-live"
+
+
+def test_update_guard_preserves_separately_managed_variants(tmp_path):
+    pin = tmp_path / "fingerprint.json"
+    pin.write_text(json.dumps({"campaign_id": "campaign-live", "ui_verified_subject_variants": [{"label": "A"}, {"label": "B"}]}))
+    with pytest.raises(ActivationBlocked, match="A/B subject variants"):
+        cli._require_safe_campaign_update("campaign-live", {"status": "draft"}, pin)
+    cli._require_safe_campaign_update("another-campaign", {"status": "paused"}, pin)
+
+
+@pytest.mark.parametrize("status", ["running", "completed", ""])
+def test_update_guard_rejects_unsafe_status_before_write(tmp_path, status):
+    with pytest.raises(ActivationBlocked, match="draft or paused"):
+        cli._require_safe_campaign_update("campaign-live", {"status": status}, tmp_path / "absent.json")
+
+
+def test_checked_in_initial_subject_uses_sourced_property_reference():
+    from integration.subjects import SUBJECT_A
+    manifest = load_campaign(CAMPAIGN, _settings())
+    assert manifest.steps[0].subject == SUBJECT_A
+    assert all(step.subject == "" and step.sendAsReply and step.quotePreviousMessages
+               for step in manifest.steps[1:])
 
 
 def test_verify_campaign_signature_reads_warmy_campaign(monkeypatch, capsys):

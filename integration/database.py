@@ -271,6 +271,19 @@ CREATE TABLE IF NOT EXISTS email_verifications (
   verified_at TEXT NOT NULL,
   PRIMARY KEY (normalized_email, policy_version)
 );
+
+CREATE TABLE IF NOT EXISTS recipient_address_history (
+  recipient_id TEXT NOT NULL,
+  normalized_email TEXT NOT NULL,
+  snapshot TEXT NOT NULL,
+  archived_at TEXT NOT NULL,
+  PRIMARY KEY (recipient_id, normalized_email, archived_at)
+);
+
+CREATE TABLE IF NOT EXISTS provider_rate_slots (
+  name TEXT PRIMARY KEY,
+  next_at REAL NOT NULL
+);
 """
 
 
@@ -439,6 +452,15 @@ class Database:
     def healthcheck(self) -> bool:
         with self.connection() as conn:
             return conn.execute("SELECT 1 AS ok").fetchone()["ok"] == 1
+
+    def reserve_provider_slot(self, name: str, interval_seconds: float) -> float:
+        """Return the wait for a cross-process request slot on this account."""
+        now = datetime.now(UTC).timestamp()
+        with self.connection(immediate=True) as conn:
+            row = conn.execute("SELECT next_at FROM provider_rate_slots WHERE name=?", (name,)).fetchone()
+            slot = max(now, row[0] if row else now)
+            conn.execute("INSERT INTO provider_rate_slots VALUES (?,?) ON CONFLICT(name) DO UPDATE SET next_at=excluded.next_at", (name, slot + interval_seconds))
+        return slot - now
 
     def enqueue_work(
         self,
@@ -1002,12 +1024,26 @@ class Database:
                 (company.company_id,),
             ).fetchone()
             if not existing:
-                for alias_type, alias_value in aliases:
+                for alias_type, alias_value in list(aliases):
                     row = conn.execute(
                         "SELECT company_id FROM sales_company_aliases WHERE alias_type=? AND alias_value=?",
                         (alias_type, alias_value),
                     ).fetchone()
                     if row and row["company_id"] != company.company_id:
+                        other = conn.execute("SELECT canonical_name,domain FROM sales_companies WHERE company_id=?", (row["company_id"],)).fetchone()
+                        if (alias_type == "domain" and other
+                                and other["canonical_name"].strip().casefold() != company.canonical_name.strip().casefold()):
+                            # Parent organizations and projects may share a
+                            # domain; a unique alias is not proof of identity.
+                            aliases.discard((alias_type, alias_value))
+                            continue
+                        if (alias_type == "name" and company.domain.strip() and other
+                                and other["domain"] and other["domain"].casefold() != company.domain.strip().casefold()):
+                            # Distinct corporate/franchise domains may share a
+                            # display name. Preserve both identities and do not
+                            # steal the existing name alias.
+                            aliases.discard((alias_type, alias_value))
+                            continue
                         raise ValueError(
                             f"company alias {alias_type}:{alias_value} already belongs to {row['company_id']}"
                         )
@@ -1143,6 +1179,13 @@ class Database:
     def upsert_recipient(self, recipient: RecipientSync) -> None:
         now = _now()
         with self.connection() as conn:
+            prior = conn.execute("SELECT * FROM sales_recipients WHERE recipient_id=?", (recipient.recipient_id,)).fetchone()
+            if prior and prior["normalized_email"] != recipient.email:
+                conn.execute("INSERT INTO recipient_address_history VALUES (?,?,?,?)",
+                    (recipient.recipient_id, prior["normalized_email"], _json(dict(prior)), now))
+                conn.execute("""UPDATE sales_recipients SET verification_status='pending',
+                    verification_policy_version='', verification_reason='',
+                    warmy_prospect_id=NULL, pipedrive_person_id=NULL WHERE recipient_id=?""", (recipient.recipient_id,))
             conn.execute(
                 """INSERT INTO sales_recipients(
                        recipient_id, company_id, person_id, normalized_email,
@@ -1181,6 +1224,18 @@ class Database:
         result = dict(row)
         result["payload"] = json.loads(result["payload"])
         return result
+
+    def recipient_email_count(self, company_id: str) -> int:
+        with self.connection() as conn:
+            row = conn.execute(
+                """SELECT COUNT(DISTINCT LOWER(TRIM(normalized_email))) AS count
+                     FROM sales_recipients
+                    WHERE company_id=? AND TRIM(normalized_email) <> ''
+                      AND verification_status!='invalid'
+                      AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.email=sales_recipients.normalized_email)""",
+                (company_id,),
+            ).fetchone()
+        return int(row["count"])
 
     def update_recipient(self, recipient_id: str, **fields: Any) -> None:
         allowed = {

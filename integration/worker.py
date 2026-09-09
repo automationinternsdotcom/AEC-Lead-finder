@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from .config import ActivationBlocked, Settings
 from .database import Database
 from .workflows import SalesWorkflows
+from .providers import ProviderError
 
 LOG = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ def run_once(
                 )
                 continue
             except Exception as error:
+                if isinstance(error, ProviderError) and error.status_code == 429:
+                    db.defer_work(item, owner, error, delay_seconds=60)
+                    LOG.warning("provider throttled; deferred without consuming retry budget", extra={"work_item_id": item.id})
+                    continue
                 terminal = db.retry_work(
                     item,
                     owner,

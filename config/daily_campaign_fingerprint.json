@@ -1,0 +1,10 @@
+{
+  "campaign_id": "92fc58e2-d68f-4c3d-878f-158f89dde5df",
+  "manifest_hash": "d0995a89872d583a3105b3f1ff19319db1d711df8e32b5f3f8b07c21a33d40b8",
+  "reviewed_on": "2026-09-08",
+  "basis": "User-requested threaded follow-up refactor: steps 2-4 have blank subjects to inherit the actual original A/B subject with Re:, sendAsReply and quotePreviousMessages true. MCP readback verified only those three subjects changed from the prior saved version; bodies, delays, audience and settings unchanged. Campaign draft with zero sends. Fingerprint now also covers reply/quote settings. Initial A/B remains equal 50 weights. 293 pending plus 41 historical completed records.",
+  "ui_verified_subject_variants": [
+    {"label": "A", "weight": 50, "subject": "{{firstName}}, could we stay in touch about janitorial needs for {{custom.projectPropertyName}}?"},
+    {"label": "B", "weight": 50, "subject": "{{firstName}}, open to staying in touch about janitorial needs for {{custom.projectPropertyName}}?"}
+  ]
+}
