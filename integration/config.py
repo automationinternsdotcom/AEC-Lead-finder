@@ -217,14 +217,14 @@ class Settings:
             missing.insert(2, "CAMPAIGN_START_ENABLED")
         return missing
 
-    def require_campaign_enrollment(self) -> None:
-        missing = self.campaign_enrollment_missing()
+    def require_campaign_enrollment(self, *, draft_only: bool = False) -> None:
+        missing = self.campaign_enrollment_missing(draft_only=draft_only)
         if missing:
             raise ActivationBlocked(
                 "campaign enrollment blocked: " + ", ".join(missing)
             )
 
-    def campaign_enrollment_missing(self) -> list[str]:
+    def campaign_enrollment_missing(self, *, draft_only: bool = False) -> list[str]:
         missing: list[str] = []
         if not self.provider_writes_enabled:
             missing.append("PROVIDER_WRITES_ENABLED")
@@ -232,7 +232,9 @@ class Settings:
             missing.append("WARMY_ENROLLMENT_ENABLED")
         if not self.email_templates_approved:
             missing.append("EMAIL_TEMPLATES_APPROVED")
-        if not self.pipedrive_automation_ready:
+        # An inert draft can accept contacts before reply-followup automations
+        # are activated. The caller must verify the live draft at action time.
+        if not self.pipedrive_automation_ready and not draft_only:
             missing.append("PIPEDRIVE_AUTOMATION_READY")
         if not self.postal_address:
             missing.append("AETHER_POSTAL_ADDRESS")

@@ -104,6 +104,10 @@ class CompanySync(BaseModel):
     domain: str = ""
     aliases: list[str] = Field(default_factory=list)
     legacy_ids: list[str] = Field(default_factory=list)
+    relationship_type: str = "unknown"
+    relationship_confidence: str = "low"
+    relationship_sources: list[str] = Field(default_factory=list)
+    outreach_route: str = "review"
 
 
 class LeadEventSync(BaseModel):

@@ -42,6 +42,28 @@ def test_approved_campaign_copy_has_disclosure_and_safe_step_invariants():
     assert "Phoenix area" not in manifest.steps[1].bodyText
 
 
+def test_followups_inherit_subject_and_keep_thread_history():
+    manifest = load_campaign(CAMPAIGN, _settings())
+    assert manifest.steps[0].subject
+    assert all(not step.subject and step.sendAsReply and step.quotePreviousMessages
+               for step in manifest.steps[1:])
+
+
+@pytest.mark.parametrize("index,threaded", [(0, True), (1, False)])
+def test_blank_subject_rejected_without_prior_thread(index, threaded):
+    payload = load_campaign(CAMPAIGN, _settings()).model_dump(mode="json")
+    payload["steps"][index].update(subject="", sendAsReply=threaded)
+    with pytest.raises(ValueError, match="blank subject requires a threaded follow-up"):
+        CampaignManifest.model_validate(payload)
+
+
+def test_campaign_fingerprint_detects_threading_drift():
+    payload = load_campaign(CAMPAIGN, _settings()).model_dump(mode="json")
+    before = campaign_manifest_hash(payload)
+    payload["steps"][1]["sendAsReply"] = False
+    assert campaign_manifest_hash(payload) != before
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

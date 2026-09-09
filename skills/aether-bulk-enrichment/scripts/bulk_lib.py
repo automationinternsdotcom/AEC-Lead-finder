@@ -23,6 +23,7 @@ from urllib.parse import urljoin, urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 from trafilatura import extract as extract_main_text
 import outreach_contract as shared_outreach
+from recipient_policy import assess_recipient, candidate_rank_key, current_employer_match
 
 from v2.artifacts import ArtifactStore, new_manifest
 from v2.apollo import ApolloFatalError, ApolloResolver, ApolloTransientError
@@ -63,8 +64,8 @@ from v2.ids import (
 from v2.qualification import JudgmentPayload
 from v2.research import ContactResearchService, DecisionMakerService
 from v2.state import SCHEMA_VERSION, StateStore
-from v2.verification import ContactVerifier, select_best
-from v2.outreach import ROLE_AUTO_SEND_THRESHOLD, score_recipient_role
+from v2.verification import ContactVerifier, is_organization_mismatch, select_best
+from v2.outreach import score_recipient_role
 from integration.handoff import (
     HANDOFF_PROTOCOL_VERSION,
     HANDOFF_SCHEMA_VERSION,
@@ -307,6 +308,10 @@ class CompanyProfile(BaseModel):
     organization_ids: list[str] = Field(default_factory=list)
     lead_event_ids: list[str] = Field(default_factory=list)
     anchor_lead_event_id: str
+    relationship_type: str = "unknown"
+    relationship_confidence: str = "low"
+    relationship_sources: list[str] = Field(default_factory=list)
+    outreach_route: str = "review"
     variants: dict[str, WhyVariant]
     evidence_urls: list[str] = Field(default_factory=list)
     record_status: str = "review"
@@ -336,7 +341,7 @@ Events: {events}
 
 Research protocol:
 - Use at most two web searches and one research path. Start with the supplied event sources and use the known official domain only when needed to verify the company, property, or ownership role. Do not research people or contacts.
-- Choose the strongest specific property event the named company directly controls. The selected lead_event_id must be one of the supplied event IDs.
+- Choose the strongest specific property event and distinguish its operator/owner from its developer, general contractor, broker/leasing representative, tenant, and project name. Never silently relabel one as another. Relationship uncertainty is a review signal, not a reason to drop the opportunity. The selected lead_event_id must be one of the supplied event IDs.
 - Ground every insertion in an official company page, government page, credible business listing, or supplied event article. Keep each insertion short, natural, and free of URLs. Use lowercase for every non-company slot.
 - The company slot must be an exact, recognizable one-to-three-word name or abbreviation derived from the supplied company name or aliases. Use its natural brand capitalization when known (for example, TSMC, JLL, or Raytheon); deterministic code resolves casing against the supplied names and rejects unknown forms.
 - The project and project_or_expansion slots may contain no more than three whitespace-separated words. Prefer a familiar shortened name that would be clear as a standalone reference in casual conversation, such as formation park 10 or nexus commerce center. Never invent an obscure abbreviation merely to satisfy the limit.
@@ -350,7 +355,7 @@ Research protocol:
 Approved templates and routing outcomes:
 {template_catalog}
 
-Return strict JSON only as {{"canonical_name":"","domain":"","employee_count":"","selection":{{"template_key":"","lead_event_id":"","slots":{{}},"confidence":"high|medium|low","source_urls":[]}}}}. Use exactly one listed template_key. For a routing outcome, return an empty slots object but still cite the evidence supporting the routing decision."""
+Return strict JSON only as {{"canonical_name":"","domain":"","employee_count":"","relationship_type":"operator|owner|property_manager|developer|contractor|broker|tenant|project|unknown","relationship_confidence":"high|medium|low","relationship_sources":[],"outreach_route":"direct_facility|construction_closeout|referral|review","selection":{{"template_key":"","lead_event_id":"","slots":{{}},"confidence":"high|medium|low","source_urls":[]}}}}. Use exactly one listed template_key. For a routing outcome, return an empty slots object but still cite the evidence supporting the routing decision."""
 
 
 BULK_QUALIFICATION_PROMPT = """Qualify this bounded batch using only the supplied saved article evidence. Do not search the web and do not identify people. For every exact candidate_id, decide whether the article reports a specific Arizona commercial-property event that creates a facilities-services opportunity.
@@ -593,7 +598,7 @@ class BulkRunner:
         self._refresh_manifest()
         return json.loads(summary_path.read_text(encoding="utf-8"))
 
-    def enrich_recipients(self, *, apollo_go: bool = False, apollo_cap: int = 444) -> dict:
+    def enrich_recipients(self, *, apollo_go: bool = False, apollo_cap: int = 444, treg_go: bool = False, treg_budget_usd: float = 5.0) -> dict:
         """Add GPS-style person/contact rows to the completed company revision."""
         if not self.options.resume:
             raise ValueError("recipient enrichment requires --resume and an existing run ID")
@@ -670,6 +675,8 @@ class BulkRunner:
             "apollo_reveal_phone": False,
             "email_delivery": False,
         }
+        if treg_go:
+            protocol.update(treg_authorized=True, treg_budget_usd=treg_budget_usd)
         protocol_path = self.artifacts.raw_dir / RECIPIENT_PROTOCOL_VERSION / "protocol.json"
         if protocol_path.exists():
             if json.loads(protocol_path.read_text(encoding="utf-8")) != protocol:
@@ -749,6 +756,7 @@ class BulkRunner:
                 contact.person_id
                 for contact in self.state.contacts_for_run(self.options.run_id)
                 if contact.selected
+                and contact.email
                 and contact.verification_status != VerificationStatus.REJECTED
                 and contact.organization_id in anchors
                 and contact.lead_event_id
@@ -774,6 +782,14 @@ class BulkRunner:
                     for future in as_completed(futures):
                         future.result()
 
+            if treg_go:
+                from v2.treg import TregClient, recover_state
+                client = TregClient(self.options.output_dir / "treg-cache.sqlite", budget_usd=treg_budget_usd)
+                try:
+                    people, _ = recover_state(self.state, self.artifacts, organizations, people,
+                        list(anchors.values()), self.state.contacts_for_run(self.options.run_id), client=client)
+                finally:
+                    client.close()
             apollo_counts = self._recipient_apollo(
                 people=people,
                 organizations=organizations_by_id,
@@ -1333,7 +1349,7 @@ class BulkRunner:
             profile = profile_by_id[person.organization_id]
             why_line = _profile_why_line(profile)
             contact = contacts_by_person.get(person.person_id)
-            first_name = _first_name(person.name)
+            first_name = 'team' if person.scope.startswith('company_mailbox:') else _first_name(person.name)
             personalized = _personalize_why_line(why_line.text, first_name)
             recipient_rows.append(
                 {
@@ -3377,6 +3393,26 @@ class BulkRunner:
                 organization_ids=sorted({event.organization_id for event in events}),
                 lead_event_ids=sorted(event.lead_event_id for event in events),
                 anchor_lead_event_id=anchor.lead_event_id,
+                relationship_type=_normalized_choice(
+                    payload.get("relationship_type"),
+                    {"operator", "owner", "property_manager", "developer", "contractor", "broker", "tenant", "project", "unknown"},
+                    "unknown",
+                ),
+                relationship_confidence=_normalized_choice(
+                    payload.get("relationship_confidence"),
+                    {"high", "medium", "low"},
+                    "low",
+                ),
+                relationship_sources=list(dict.fromkeys(
+                    str(value).strip()
+                    for value in payload.get("relationship_sources", [])
+                    if isinstance(value, str) and str(value).strip()
+                )),
+                outreach_route=_normalized_choice(
+                    payload.get("outreach_route"),
+                    {"direct_facility", "construction_closeout", "referral", "review"},
+                    "review",
+                ),
                 variants={"primary": why_line},
                 evidence_urls=event_evidence_urls,
                 record_status=_profile_record_status(why_line),
@@ -4203,6 +4239,10 @@ def _bulk_sales_handoff(
             domain=profile.domain,
             aliases=profile.aliases,
             legacy_ids=profile.organization_ids,
+            relationship_type=profile.relationship_type,
+            relationship_confidence=profile.relationship_confidence,
+            relationship_sources=profile.relationship_sources,
+            outreach_route=profile.outreach_route,
         )
         for profile in profiles
     ]
@@ -4291,22 +4331,41 @@ def _bulk_sales_handoff(
     recipient_reasons: dict[str, list[str]] = {}
     recipients_by_company: dict[str, list[RecipientSync]] = defaultdict(list)
     for company_id, rows in sorted(ranked.items()):
+        profile = profiles_by_id[company_id]
         rows.sort(
-            key=lambda row: (
-                -row[0],
-                int(row[2].provider.casefold() == "apollo"),
-                row[3].person_id,
+            key=lambda row: candidate_rank_key(
+                current_employer=current_employer_match(row[2].email, profile.domain),
+                role_score=row[0],
+                local_scope=any(value in normalize_text(row[3].scope) for value in ("arizona", "phoenix", "local", "regional")),
+                non_fallback_provider=row[2].provider.casefold() != "apollo",
+                verification_status=row[2].verification_status.value,
+                evidence_count=len(row[2].evidence),
+                stable_id=row[3].person_id,
             )
         )
-        profile = profiles_by_id[company_id]
         anchor = events_by_id[profile.anchor_lead_event_id]
         why_line = _profile_why_line(profile)
+        sole_email = len({row[2].email.strip().casefold() for row in rows}) == 1
         for rank, (role_score, rationale, contact, person) in enumerate(rows, start=1):
-            reasons: list[str] = []
-            if rank != 1:
-                reasons.append("recipient_not_primary")
-            if role_score < ROLE_AUTO_SEND_THRESHOLD:
-                reasons.append("recipient_role_score_below_70")
+            assessment = assess_recipient(
+                verification_status=contact.verification_status.value,
+                verification_reason=contact.verification_reason,
+                primary=rank == 1,
+                role_score=role_score,
+                alternative_email_count=1 if sole_email else len(rows),
+            )
+            reasons: list[str] = [
+                *assessment.hard_failures,
+                *assessment.selection_blocks,
+            ]
+            rationale = [
+                *rationale,
+                *assessment.quality_signals,
+                f"company_relationship_{profile.relationship_type}",
+                f"outreach_route_{profile.outreach_route}",
+            ]
+            if profile.relationship_confidence == "low":
+                rationale.append("company_relationship_confidence_low")
             if why_line.status != "valid":
                 reasons.append(f"why_line_status_{why_line.status}")
             if why_line.confidence not in {"high", "medium"}:
@@ -4324,7 +4383,7 @@ def _bulk_sales_handoff(
                 contact.contact_candidate_id,
             } & open_review_ids:
                 reasons.append("blocking_open_review")
-            first_name = _first_name(person.name)
+            first_name = 'team' if person.scope.startswith('company_mailbox:') else _first_name(person.name)
             if not first_name:
                 reasons.append("recipient_first_name_missing")
                 first_name = "unknown"
@@ -4420,10 +4479,10 @@ def _bulk_sales_handoff(
 
 
 def _contact_can_reach_warmy_verification(contact: ContactCandidate) -> bool:
-    return contact.verification_status == VerificationStatus.VERIFIED or (
-        contact.verification_status == VerificationStatus.UNKNOWN
-        and contact.verification_reason == "domain_mx_valid_mailbox_unverified"
-    )
+    return contact.verification_status in {
+        VerificationStatus.VERIFIED,
+        VerificationStatus.UNKNOWN,
+    }
 
 
 def _block_cross_run_duplicate_events(
@@ -4822,12 +4881,18 @@ def _duplicate_tokens(value: str, company_key: str) -> set[str]:
     return output
 
 
-def _bulk_contact_preference(contact: ContactCandidate) -> tuple[int, int, str]:
+def _bulk_contact_preference(contact: ContactCandidate) -> tuple[int, int, int, str]:
     return (
+        int(not is_organization_mismatch(contact)),
         int(contact.provider.casefold() != "apollo"),
         len(contact.evidence),
         contact.contact_candidate_id,
     )
+
+
+def _normalized_choice(value: object, allowed: set[str], default: str) -> str:
+    normalized = str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    return normalized if normalized in allowed else default
 
 
 def _domain(value: str) -> str:

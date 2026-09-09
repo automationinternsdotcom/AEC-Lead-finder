@@ -16,6 +16,7 @@ from outreach_contract import (
     parse_why_line_selection,
     template_catalog,
 )
+from recipient_policy import assess_recipient, candidate_rank_key, current_employer_match
 
 from .artifacts import ArtifactStore
 from .contracts import (
@@ -32,6 +33,7 @@ from .contracts import (
 )
 from .ids import normalize_text, stable_uuid
 from .state import StateStore
+from .verification import is_organization_mismatch
 
 
 ModelCall = Callable[[str, str, list[dict]], tuple[str, dict]]
@@ -47,14 +49,14 @@ Known locations: {locations}
 Deterministic anchor event ID: {anchor_id}
 Events: {events}
 
-Use web search to verify the canonical company, official domain, and the strongest specific property event the company directly controls. The selected lead_event_id must be supplied. For acquisitions, use acquisition only when the company is the buyer/new owner. Route sellers, brokers, listings, auctions, and unclear ownership to route_new_owner. Route closures, bankruptcies, lawsuits, stalled or abandoned projects to skip_negative unless a reopening or reuse is verified. Route general market or portfolio signals without a property trigger to skip_general.
+Use web search to verify the canonical company, official domain, and the strongest specific property event. Distinguish the event's operator/owner from its developer, general contractor, broker/leasing representative, and project name. Do not silently relabel one as another. The selected lead_event_id must be supplied. Relationship uncertainty is a quality signal, not a reason to discard the opportunity: preserve it as relationship_type unknown and outreach_route review. For acquisitions, use acquisition only when the company is the buyer/new owner. Route sellers, brokers, listings, auctions, and unclear ownership to route_new_owner. Route closures, bankruptcies, lawsuits, stalled or abandoned projects to skip_negative unless a reopening or reuse is verified. Route general market or portfolio signals without a property trigger to skip_general.
 
 Return insertion slots only; never write the final sentence. Company/project references are at most three words. Location is one leaf locality or neighborhood, at most three words, without state, county, region, parent city, road detail, comma, or second city. Cite supplied articles, official company/government pages, or credible business evidence.
 
 Approved templates and routes:
 {templates}
 
-Return strict JSON only as {{"canonical_name":"","domain":"","employee_count":"","selection":{{"template_key":"","lead_event_id":"","slots":{{}},"confidence":"high|medium|low","source_urls":[]}}}}."""
+Return strict JSON only as {{"canonical_name":"","domain":"","employee_count":"","relationship_type":"operator|owner|property_manager|developer|contractor|broker|tenant|project|unknown","relationship_confidence":"high|medium|low","relationship_sources":[],"outreach_route":"direct_facility|construction_closeout|referral|review","selection":{{"template_key":"","lead_event_id":"","slots":{{}},"confidence":"high|medium|low","source_urls":[]}}}}."""
 
 
 class CompanyOutreachService:
@@ -213,6 +215,36 @@ class CompanyOutreachService:
             ) or company_id
             errors = list(selection.validation_errors)
             record_status = RecordStatus.VALID if not errors else RecordStatus.REVIEW
+            relationship_type = _normalized_choice(
+                payload.get("relationship_type"),
+                {
+                    "operator",
+                    "owner",
+                    "property_manager",
+                    "developer",
+                    "contractor",
+                    "broker",
+                    "tenant",
+                    "project",
+                    "unknown",
+                },
+                "unknown",
+            )
+            relationship_confidence = _normalized_choice(
+                payload.get("relationship_confidence"),
+                {"high", "medium", "low"},
+                "low",
+            )
+            outreach_route = _normalized_choice(
+                payload.get("outreach_route"),
+                {"direct_facility", "construction_closeout", "referral", "review"},
+                "review",
+            )
+            relationship_sources = [
+                str(value).strip()
+                for value in payload.get("relationship_sources", [])
+                if isinstance(value, str) and str(value).strip()
+            ]
             profile = CompanyProfile(
                 company_id=company_id,
                 run_id=self.artifacts.run_id,
@@ -229,6 +261,10 @@ class CompanyOutreachService:
                 organization_ids=sorted(event.organization_id for event in events),
                 lead_event_ids=sorted(event.lead_event_id for event in events),
                 anchor_lead_event_id=anchor.lead_event_id,
+                relationship_type=relationship_type,
+                relationship_confidence=relationship_confidence,
+                relationship_sources=list(dict.fromkeys(relationship_sources)),
+                outreach_route=outreach_route,
                 why_line=selection.text,
                 why_template_key=selection.template_key,
                 why_slots=selection.slots,
@@ -340,22 +376,37 @@ class CompanyOutreachService:
         output: list[OutreachRecipient] = []
         profiles_by_id = {item.company_id: item for item in profiles}
         for company_id, rows in sorted(by_company.items()):
+            profile = profiles_by_id[company_id]
             rows.sort(
-                key=lambda row: (
-                    -row[0],
-                    int(row[2].provider.casefold() == "apollo"),
-                    -int(_local_scope(row[3].scope)),
-                    row[3].person_id,
+                key=lambda row: candidate_rank_key(
+                    current_employer=current_employer_match(row[2].email, profile.domain),
+                    role_score=row[0],
+                    local_scope=_local_scope(row[3].scope),
+                    non_fallback_provider=row[2].provider.casefold() != "apollo",
+                    verification_status=row[2].verification_status.value,
+                    evidence_count=len(row[2].evidence),
+                    stable_id=row[3].person_id,
                 )
             )
-            profile = profiles_by_id[company_id]
             anchor = events_by_id[profile.anchor_lead_event_id]
+            sole_email = len({row[2].email.strip().casefold() for row in rows}) == 1
             for index, (role_score, rationale, contact, person) in enumerate(rows, start=1):
-                reasons: list[str] = []
-                if index != 1:
-                    reasons.append("recipient_not_primary")
-                if role_score < ROLE_AUTO_SEND_THRESHOLD:
-                    reasons.append("recipient_role_score_below_70")
+                assessment = assess_recipient(
+                    verification_status=contact.verification_status.value,
+                    verification_reason=contact.verification_reason,
+                    primary=index == 1,
+                    role_score=role_score,
+                    alternative_email_count=1 if sole_email else len(rows),
+                )
+                reasons: list[str] = [
+                    *assessment.hard_failures,
+                    *assessment.selection_blocks,
+                ]
+                rationale = [*rationale, *assessment.quality_signals]
+                rationale.append(f"company_relationship_{profile.relationship_type}")
+                rationale.append(f"outreach_route_{profile.outreach_route}")
+                if profile.relationship_confidence == "low":
+                    rationale.append("company_relationship_confidence_low")
                 if profile.record_status != RecordStatus.VALID:
                     reasons.append("company_profile_not_valid")
                 if profile.why_line_status != "valid":
@@ -370,7 +421,7 @@ class CompanyOutreachService:
                     reasons.append("anchor_score_zero")
                 if {profile.company_id, anchor.lead_event_id, person.person_id, contact.contact_candidate_id} & open_review_ids:
                     reasons.append("blocking_open_review")
-                name = first_name(person.name)
+                name = 'team' if person.scope.startswith('company_mailbox:') else first_name(person.name)
                 if not name:
                     reasons.append("recipient_first_name_missing")
                 output.append(
@@ -406,10 +457,10 @@ def _eligible_for_authoritative_verification(contact: ContactCandidate) -> bool:
     bounded precheck that permits the integration layer to request the
     authoritative Warmy result before approval eligibility is granted.
     """
-    return contact.verification_status == VerificationStatus.VERIFIED or (
-        contact.verification_status == VerificationStatus.UNKNOWN
-        and contact.verification_reason == "domain_mx_valid_mailbox_unverified"
-    )
+    return contact.verification_status in {
+        VerificationStatus.VERIFIED,
+        VerificationStatus.UNKNOWN,
+    }
 
 
 def score_recipient_role(title: str, scope: str) -> tuple[int, list[str]]:
@@ -447,8 +498,9 @@ def _local_scope(scope: str) -> bool:
     return any(value in text for value in ("arizona", "phoenix", "local", "regional"))
 
 
-def _contact_preference(contact: ContactCandidate) -> tuple[int, int, str]:
+def _contact_preference(contact: ContactCandidate) -> tuple[int, int, int, str]:
     return (
+        int(not is_organization_mismatch(contact)),
         int(contact.provider.casefold() != "apollo"),
         len(contact.evidence),
         contact.contact_candidate_id,
@@ -464,6 +516,11 @@ def _parse_object(text: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError("company response must be an object")
     return value
+
+
+def _normalized_choice(value: object, allowed: set[str], default: str) -> str:
+    normalized = str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    return normalized if normalized in allowed else default
 
 
 def _default_model_call(model: str, prompt: str, tools: list[dict]) -> tuple[str, dict]:

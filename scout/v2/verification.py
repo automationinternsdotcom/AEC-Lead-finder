@@ -64,9 +64,7 @@ class ContactVerifier:
         if email and not normalized_email:
             return VerificationResult(VerificationStatus.REJECTED, "email_empty_after_normalization")
         if normalized_email:
-            syntax_error = email_rejection_reason(
-                normalized_email, organization_domain, domain_aliases
-            )
+            syntax_error = email_rejection_reason(normalized_email)
             if syntax_error:
                 return VerificationResult(
                     VerificationStatus.REJECTED,
@@ -76,6 +74,9 @@ class ContactVerifier:
                     linkedin=normalized_linkedin,
                 )
             domain = normalized_email.rsplit("@", 1)[1]
+            organization_mismatch = not email_domain_matches_organization(
+                domain, organization_domain, domain_aliases
+            )
             mx = self._cached_check("mx", domain, lambda: self.mx_lookup(domain))
             if mx is False:
                 return VerificationResult(
@@ -100,13 +101,25 @@ class ContactVerifier:
                     )
             if http is True:
                 status = VerificationStatus.VERIFIED
-                reason = "external_email_verifier_valid"
+                reason = (
+                    "external_email_verifier_valid_organization_mismatch"
+                    if organization_mismatch
+                    else "external_email_verifier_valid"
+                )
             elif mx is True:
                 status = VerificationStatus.UNKNOWN
-                reason = "domain_mx_valid_mailbox_unverified"
+                reason = (
+                    "email_domain_organization_mismatch_mx_valid"
+                    if organization_mismatch
+                    else "domain_mx_valid_mailbox_unverified"
+                )
             else:
                 status = VerificationStatus.UNKNOWN
-                reason = "email_syntax_valid_verification_unknown"
+                reason = (
+                    "email_domain_organization_mismatch_verification_unknown"
+                    if organization_mismatch
+                    else "email_syntax_valid_verification_unknown"
+                )
             return VerificationResult(
                 status,
                 reason,
@@ -155,19 +168,38 @@ def email_rejection_reason(
     organization_domain: str = "",
     domain_aliases: tuple[str, ...] = (),
 ) -> str:
+    """Return only hard address failures.
+
+    Organization-domain mismatch is intentionally a soft quality signal. A
+    current-employer address wins when available, but a syntactically valid
+    address with mail service remains eligible as the last-resort fallback.
+    """
     if not EMAIL_RE.fullmatch(email):
         return "email_syntax_invalid"
     domain = email.rsplit("@", 1)[1].casefold()
     if domain in DISPOSABLE_DOMAINS:
         return "email_domain_disposable"
+    return ""
+
+
+def email_domain_matches_organization(
+    email_domain: str,
+    organization_domain: str = "",
+    domain_aliases: tuple[str, ...] = (),
+) -> bool:
     expected = {
         value.casefold().removeprefix("www.")
         for value in (organization_domain, *domain_aliases)
         if value
     }
-    if expected and domain not in expected and not any(domain.endswith(f".{item}") for item in expected):
-        return "email_domain_organization_mismatch"
-    return ""
+    if not expected:
+        return True
+    domain = email_domain.casefold().removeprefix("www.")
+    return domain in expected or any(domain.endswith(f".{item}") for item in expected)
+
+
+def is_organization_mismatch(candidate: ContactCandidate) -> bool:
+    return "organization_mismatch" in candidate.verification_reason
 
 
 def normalize_phone(value: str) -> str:
@@ -211,15 +243,16 @@ def lookup_mx(domain: str) -> bool | None:
         return None
 
 
-def contact_rank(candidate: ContactCandidate) -> tuple[int, int, int, int, str]:
+def contact_rank(candidate: ContactCandidate) -> tuple[int, int, int, int, int, str]:
     verification = {
         VerificationStatus.VERIFIED: 2,
         VerificationStatus.UNKNOWN: 1,
         VerificationStatus.REJECTED: 0,
     }[candidate.verification_status]
     return (
-        verification,
         int(bool(candidate.email)),
+        int(not is_organization_mismatch(candidate)),
+        verification,
         int(bool(candidate.phone)),
         len(candidate.evidence),
         candidate.contact_candidate_id,

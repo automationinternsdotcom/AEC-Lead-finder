@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scout"))
 
 from v2.artifacts import ArtifactStore  # noqa: E402
 from v2.contracts import (  # noqa: E402
+    ContactCandidate,
     Evidence,
     LeadEvent,
     Organization,
@@ -53,6 +54,51 @@ def test_verifier_rejects_disposable_and_caches_mx(tmp_path):
     assert first.status == second.status == VerificationStatus.UNKNOWN
     assert first.reason == second.reason == "domain_mx_valid_mailbox_unverified"
     assert calls == ["acme.com"]
+
+
+def test_former_employer_address_is_soft_fallback_and_current_domain_wins(tmp_path):
+    store, _, organization, evidence = setup(tmp_path)
+    verifier = ContactVerifier(store, mx_lookup=lambda domain: True)
+
+    former = verifier.verify(
+        email="jane@former-employer.com",
+        organization_domain=organization.domain,
+    )
+    assert former.status == VerificationStatus.UNKNOWN
+    assert former.reason == "email_domain_organization_mismatch_mx_valid"
+
+    candidates = select_best(
+        [
+            ContactCandidate(
+                contact_candidate_id="former",
+                run_id="run-1",
+                lead_event_id="event-1",
+                organization_id=organization.organization_id,
+                person_id="person-1",
+                person_name="Jane Manager",
+                email=former.email,
+                provider="fallback",
+                verification_status=VerificationStatus.VERIFIED,
+                verification_reason="external_email_verifier_valid_organization_mismatch",
+                evidence=evidence,
+            ),
+            ContactCandidate(
+                contact_candidate_id="current",
+                run_id="run-1",
+                lead_event_id="event-1",
+                organization_id=organization.organization_id,
+                person_id="person-1",
+                person_name="Jane Manager",
+                email="jane@acme.com",
+                provider="web",
+                verification_status=VerificationStatus.UNKNOWN,
+                verification_reason="domain_mx_valid_mailbox_unverified",
+                evidence=evidence,
+            ),
+        ]
+    )
+    selected = next(item for item in candidates if item.selected)
+    assert selected.contact_candidate_id == "current"
 
 
 def test_decision_makers_require_sources_and_persist_people(tmp_path):

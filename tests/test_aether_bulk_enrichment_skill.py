@@ -212,12 +212,31 @@ def test_bulk_sales_handoff_ranks_and_gates_recipients():
     assert len(handoff.companies) == 1
     assert len(handoff.lead_events) == 1
     assert handoff.lead_events[0].crm_eligible
-    assert len(handoff.recipients) == 2
+    assert len(handoff.recipients) == 3
     assert handoff.recipients[0].person_id == operator.person_id
     assert handoff.recipients[0].primary and handoff.recipients[0].rank == 1
+    weak_recipient = next(
+        item for item in handoff.recipients if item.person_id == weak.person_id
+    )
+    assert weak_recipient.source_verification_reason == "mailbox_unverified"
     assert len(handoff.sequences) == 1
     assert handoff.sequences[0].eligibility_status == EligibilityStatus.READY
     assert handoff.content_hash == handoff_content_hash(handoff)
+
+    sole_email_handoff = _bulk_sales_handoff(
+        run_id=run_id,
+        profiles=[profile],
+        events=[event],
+        candidates={candidate.candidate_id: candidate},
+        scores={event.lead_event_id: 90},
+        people=[weak],
+        contacts=[contact(weak, "wendy@acme.example", reason="mailbox_unverified")],
+        open_review_ids=set(),
+    )
+    assert sole_email_handoff.sequences[0].eligibility_status == EligibilityStatus.READY
+    assert "sole_email_role_fallback" in (
+        sole_email_handoff.recipients[0].selection_rationale
+    )
 
 
 @pytest.mark.parametrize("reverse", [False, True])

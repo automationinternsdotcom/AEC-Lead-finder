@@ -34,8 +34,24 @@ from .providers import (
     WarmyClient,
 )
 from .security import issue_unsubscribe_token
+from .recipient_guard import inspect_recipient_guard
+from recipient_policy import SENDABLE_ADDRESS_STATUSES, assess_recipient
 
 LOG = logging.getLogger(__name__)
+
+FALLBACK_SENDABLE_VERIFICATION_STATUSES = frozenset(
+    {
+        VerificationStatus.VALID,
+        VerificationStatus.CATCH_ALL,
+        VerificationStatus.UNKNOWN,
+    }
+)
+FALLBACK_SENDABLE_SOURCE_STATUSES = SENDABLE_ADDRESS_STATUSES
+
+
+def verification_allows_fallback_send(status: VerificationStatus) -> bool:
+    """Allow uncertain-but-not-invalid addresses as the best available fallback."""
+    return status in FALLBACK_SENDABLE_VERIFICATION_STATUSES
 
 
 class WorkflowRetry(RuntimeError):
@@ -102,7 +118,20 @@ class SalesWorkflows:
             handler = handlers[item.kind]
         except KeyError as error:
             raise ValueError(f"unknown work kind: {item.kind}") from error
-        handler(item.payload)
+        try:
+            handler(item.payload)
+        except ProviderError as error:
+            archived = error.provider == "pipedrive" and error.status_code == 403 and error.code.casefold() == "lead is archived"
+            if not archived or item.kind not in {"scout.lead.sync", "scout.sequence.sync"}:
+                raise
+            if item.kind == "scout.sequence.sync":
+                sequence = OutreachSequenceSync.model_validate(item.payload["sequence"])
+                event_id = sequence.anchor_lead_event_id
+                self._block_sequence(sequence, ["anchor_lead_archived"])
+            else:
+                event_id = item.payload["lead_event"]["lead_event_id"]
+            self.db.update_lead_event(event_id, crm_state="archived")
+            LOG.info("preserved archived Pipedrive lead", extra={"lead_event_id":event_id})
 
     def _operation(
         self,
@@ -151,6 +180,20 @@ class SalesWorkflows:
         self.db.complete_operation(provider, key, response, external_id=external_id)
         return response
 
+    def _find_available_organization(self, company: dict[str, Any]) -> int | None:
+        """A name match cannot steal a CRM ID owned by a distinct local entity."""
+        found = self.pipedrive.find_organization(company["canonical_name"])
+        if found is None:
+            return None
+        with self.db.connection() as conn:
+            owner = conn.execute(
+                "SELECT company_id FROM sales_companies WHERE pipedrive_organization_id=?",
+                (int(found),),
+            ).fetchone()
+        if owner and owner["company_id"] != company["company_id"]:
+            return None
+        return int(found)
+
     def sync_lead_event(self, payload: dict[str, Any]) -> None:
         event = LeadEventSync.model_validate(payload["lead_event"])
         if not event.crm_eligible:
@@ -161,9 +204,7 @@ class SalesWorkflows:
         self.settings.require_provider_writes()
         organization_id = company.get("pipedrive_organization_id")
         if organization_id is None:
-            organization_id = self.pipedrive.find_organization(
-                company["canonical_name"]
-            )
+            organization_id = self._find_available_organization(company)
         if organization_id is None:
             response = self._operation(
                 "pipedrive",
@@ -179,9 +220,7 @@ class SalesWorkflows:
                 reconcile=lambda: (
                     {"id": found}
                     if (
-                        found := self.pipedrive.find_organization(
-                            company["canonical_name"]
-                        )
+                        found := self._find_available_organization(company)
                     )
                     else None
                 ),
@@ -247,33 +286,31 @@ class SalesWorkflows:
         recipient = RecipientSync.model_validate(payload["recipient"])
         if recipient.recipient_id != sequence.primary_recipient_id:
             raise ValueError("sequence primary recipient payload mismatch")
-        if not recipient.primary or recipient.rank != 1:
-            self._block_sequence(sequence, ["recipient_not_primary"])
-            return
-        if recipient.role_score < 70:
-            self._block_sequence(sequence, ["recipient_role_score_below_70"])
-            return
-        source_ready_for_warmy = (
-            recipient.source_verification_status == "verified"
-            or (
-                recipient.source_verification_status == "unknown"
-                and recipient.source_verification_reason
-                == "domain_mx_valid_mailbox_unverified"
-            )
+        guard = inspect_recipient_guard(self.db, recipient.company_id, recipient.email)
+        assessment = assess_recipient(
+            verification_status=recipient.source_verification_status,
+            verification_reason=recipient.source_verification_reason,
+            primary=recipient.primary and recipient.rank == 1,
+            role_score=recipient.role_score,
+            alternative_email_count=self.db.recipient_email_count(recipient.company_id),
+            suppressed=self.db.is_suppressed(recipient.email),
+            identity_excluded=guard.hard_failure,
         )
-        if not source_ready_for_warmy:
-            self._block_sequence(
-                sequence,
-                ["source_email_precheck_not_sufficient"],
-            )
-            return
-        if self.db.is_suppressed(recipient.email):
-            self._block_sequence(sequence, ["recipient_suppressed"])
+        policy_reasons = [
+            *assessment.hard_failures,
+            *assessment.selection_blocks,
+            *(reason for reason in guard.reasons if reason != "company_identity_mismatch"),
+        ]
+        if policy_reasons:
+            self._block_sequence(sequence, list(dict.fromkeys(policy_reasons)))
             return
         company = self.db.get_company(sequence.company_id)
         event = self.db.get_lead_event(sequence.anchor_lead_event_id)
         if not company or not event:
             raise WorkflowRetry("sequence company or anchor event is missing")
+        if event.get("crm_state") == "archived":
+            self._block_sequence(sequence, ["anchor_lead_archived"])
+            return
         if not event.get("pipedrive_lead_id"):
             raise WorkflowRetry("anchor Pipedrive Lead has not been synchronized")
 
@@ -284,6 +321,8 @@ class SalesWorkflows:
         unsubscribe_url = f"{self.settings.public_base_url}/unsubscribe?t={token}"
         merge_snapshot = dict(sequence.merge_snapshot)
         merge_snapshot["unsubscribeUrl"] = unsubscribe_url
+        from .subjects import project_reference
+        merge_snapshot["projectPropertyName"] = project_reference(sequence.model_dump(mode="json"))
         merge_hash = hashlib.sha256(
             json.dumps(
                 merge_snapshot,
@@ -384,7 +423,7 @@ class SalesWorkflows:
             verification_policy_version=policy,
             verification_reason=str(verification.get("reason") or ""),
         )
-        if status != VerificationStatus.VALID:
+        if not verification_allows_fallback_send(status):
             self._block_sequence(sequence, [f"warmy_verification_{status.value}"])
             if status == VerificationStatus.INVALID:
                 self.db.suppress(
@@ -401,13 +440,14 @@ class SalesWorkflows:
         warmy_payload = {
             "email": recipient.email,
             "first_name": recipient.first_name,
-            "last_name": _split_name(recipient.full_name)[1],
+            "last_name": '' if recipient.scope.startswith('company_mailbox:') else _split_name(recipient.full_name)[1],
             "organization_name": company["canonical_name"],
             "title": recipient.title,
             "lead_event_id": sequence.anchor_lead_event_id,
             "outreach_id": sequence.sequence_id,
             "source_contact_candidate_id": recipient.contact_candidate_id,
             "why_line": sequence.personalized_why_line,
+            "project_property_name": merge_snapshot["projectPropertyName"],
             "unsubscribe_url": unsubscribe_url,
         }
         if not prospect_id:
@@ -470,15 +510,29 @@ class SalesWorkflows:
         recipient = self.db.get_recipient(
             recipient_id=sequence["primary_recipient_id"]
         )
-        if not recipient or recipient["verification_status"] != VerificationStatus.VALID.value:
-            raise ActivationBlocked("primary recipient is not Warmy-verified")
+        if not recipient or not verification_allows_fallback_send(
+            VerificationStatus(recipient["verification_status"])
+        ):
+            raise ActivationBlocked("primary recipient has no sendable verification result")
         if self.db.is_suppressed(recipient["normalized_email"]):
             raise ActivationBlocked("primary recipient is suppressed")
+        guard = inspect_recipient_guard(
+            self.db, sequence["company_id"], recipient["normalized_email"]
+        )
+        if guard.identity_exclusion:
+            raise ActivationBlocked("recipient belongs to a different company")
+        if guard.review_hold:
+            raise ActivationBlocked("recipient is held for accuracy review")
         prospect_id = str(recipient.get("warmy_prospect_id") or "")
         if not prospect_id:
             raise WorkflowRetry("Warmy prospect has not been created")
-        self.settings.require_campaign_enrollment()
+        draft_only = payload.get("draft_only") is True
+        self.settings.require_campaign_enrollment(draft_only=draft_only)
         campaign = self.warmy.get_campaign(self.settings.warmy_campaign_id)
+        if draft_only:
+            campaign_data = campaign.get("data") or campaign
+            if str(campaign_data.get("status") or "").casefold() != "draft":
+                raise ActivationBlocked("draft-only ingestion requires a live draft campaign")
         mailbox_verification = self._validate_live_campaign(
             campaign, for_enrollment=True
         )
@@ -781,7 +835,7 @@ class SalesWorkflows:
         if mapping.pipedrive_person_id and fields:
             self.pipedrive.update_person(mapping.pipedrive_person_id, fields)
 
-        if status == VerificationStatus.VALID:
+        if verification_allows_fallback_send(status):
             self.db.enqueue_work(
                 "warmy.enroll",
                 f"warmy:enroll:{self.settings.warmy_campaign_id}:{mapping.warmy_prospect_id}",
@@ -798,7 +852,7 @@ class SalesWorkflows:
     def enroll_contact(self, payload: dict[str, Any]) -> None:
         outreach_id = str(payload["outreach_id"])
         mapping = self._mapping(outreach_id)
-        if mapping.verification_status != VerificationStatus.VALID:
+        if not verification_allows_fallback_send(mapping.verification_status):
             return
         if self.db.is_suppressed(mapping.email):
             return

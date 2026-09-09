@@ -18,6 +18,13 @@ from .providers import WarmyClient
 from .provisioning import apply as apply_provisioning
 from .provisioning import plan as provisioning_plan
 from .scout_bridge import contacts_from_csv
+from recipient_policy import SENDABLE_ADDRESS_STATUSES, assess_recipient
+
+
+FALLBACK_ADDRESS_REASONS = frozenset(
+    {"warmy_verification_catch_all", "warmy_verification_unknown"}
+)
+ROLE_BLOCK_REASON = "recipient_role_score_below_70"
 
 
 def _json(value) -> None:
@@ -98,6 +105,120 @@ def _verify_campaign_draft(
     return campaign_id, readback_response, mailbox_verification
 
 
+def _fallback_address_plan(db: Database) -> list[dict[str, Any]]:
+    """Return blocked sequences whose only failure is an uncertain address result."""
+    with db.connection() as conn:
+        rows = conn.execute(
+            """SELECT s.sequence_id, s.payload AS sequence_payload,
+                      s.eligibility_reasons, r.payload AS recipient_payload,
+                      r.verification_status,
+                      (SELECT COUNT(DISTINCT LOWER(TRIM(other.normalized_email))) FROM sales_recipients other
+                        WHERE other.company_id=s.company_id
+                          AND other.verification_status!='invalid'
+                          AND NOT EXISTS (SELECT 1 FROM suppressions sx WHERE sx.email=other.normalized_email)
+                          AND TRIM(other.normalized_email) <> '') AS address_count
+                 FROM outreach_sequences s
+                 JOIN sales_recipients r
+                   ON r.recipient_id=s.primary_recipient_id
+                 LEFT JOIN suppressions x
+                   ON x.email=r.normalized_email
+                WHERE s.approval_state='draft'
+                  AND s.eligibility_status='blocked'
+                  AND r.verification_status IN ('catch_all', 'unknown')
+                  AND x.email IS NULL
+                ORDER BY s.sequence_id"""
+        ).fetchall()
+    planned: list[dict[str, Any]] = []
+    for row in rows:
+        reasons = set(json.loads(row["eligibility_reasons"] or "[]"))
+        if not reasons or not reasons.issubset(FALLBACK_ADDRESS_REASONS):
+            continue
+        recipient = json.loads(row["recipient_payload"])
+        assessment = assess_recipient(
+            verification_status=row["verification_status"],
+            verification_reason=str(recipient.get("source_verification_reason") or ""),
+            primary=bool(recipient.get("primary")) and int(recipient.get("rank") or 0) == 1,
+            role_score=int(recipient.get("role_score") or 0),
+            alternative_email_count=int(row["address_count"]),
+        )
+        if not assessment.eligible:
+            continue
+        recipient["selection_rationale"] = list(dict.fromkeys([
+            *(recipient.get("selection_rationale") or []),
+            *assessment.quality_signals,
+        ]))
+        sequence = json.loads(row["sequence_payload"])
+        sequence["eligibility_status"] = "ready"
+        sequence["eligibility_reasons"] = []
+        planned.append(
+            {
+                "sequence_id": row["sequence_id"],
+                "verification_status": row["verification_status"],
+                "sequence": sequence,
+                "recipient": recipient,
+            }
+        )
+    return planned
+
+
+def _sole_email_role_plan(db: Database) -> list[dict[str, Any]]:
+    """Return role-blocked primaries that now pass or are the sole found address."""
+    with db.connection() as conn:
+        rows = conn.execute(
+            """SELECT s.sequence_id, s.payload AS sequence_payload,
+                      s.eligibility_reasons, r.payload AS recipient_payload,
+                      (SELECT COUNT(DISTINCT LOWER(TRIM(other.normalized_email))) FROM sales_recipients other
+                        WHERE other.company_id=s.company_id
+                          AND other.verification_status!='invalid'
+                          AND NOT EXISTS (SELECT 1 FROM suppressions sx WHERE sx.email=other.normalized_email)
+                          AND TRIM(other.normalized_email) <> '') AS address_count
+                 FROM outreach_sequences s
+                 JOIN sales_recipients r
+                   ON r.recipient_id=s.primary_recipient_id
+                 LEFT JOIN suppressions x
+                   ON x.email=r.normalized_email
+                WHERE s.approval_state='draft'
+                  AND s.eligibility_status='blocked'
+                  AND x.email IS NULL
+                ORDER BY s.sequence_id"""
+        ).fetchall()
+    planned: list[dict[str, Any]] = []
+    for row in rows:
+        reasons = set(json.loads(row["eligibility_reasons"] or "[]"))
+        if reasons != {ROLE_BLOCK_REASON}:
+            continue
+        recipient = json.loads(row["recipient_payload"])
+        if (
+            not recipient.get("primary")
+            or int(recipient.get("rank") or 0) != 1
+            or str(recipient.get("source_verification_status") or "").casefold()
+            not in SENDABLE_ADDRESS_STATUSES
+        ):
+            continue
+        role_score = int(recipient.get("role_score") or 0)
+        address_count = int(row["address_count"])
+        if role_score < 70 and address_count != 1:
+            continue
+        if role_score < 70:
+            rationale = list(recipient.get("selection_rationale") or [])
+            recipient["selection_rationale"] = list(
+                dict.fromkeys([*rationale, "sole_email_role_fallback"])
+            )
+        sequence = json.loads(row["sequence_payload"])
+        sequence["eligibility_status"] = "ready"
+        sequence["eligibility_reasons"] = []
+        planned.append(
+            {
+                "sequence_id": row["sequence_id"],
+                "role_score": role_score,
+                "address_count": address_count,
+                "sequence": sequence,
+                "recipient": recipient,
+            }
+        )
+    return planned
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -135,6 +256,10 @@ def main() -> int:
 
     commands.add_parser("doctor")
     commands.add_parser("replay-dead-letters")
+    fallback_addresses = commands.add_parser("reconcile-fallback-addresses")
+    fallback_addresses.add_argument("--apply", action="store_true")
+    role_fallbacks = commands.add_parser("reconcile-role-fallbacks")
+    role_fallbacks.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     settings = Settings.from_env()
 
@@ -207,6 +332,77 @@ def main() -> int:
     if args.command == "replay-dead-letters":
         replayed = Database(settings.database_path).replay_dead_letters()
         _json({"replayed": replayed})
+        return 0
+    if args.command == "reconcile-fallback-addresses":
+        db = Database(settings.database_path)
+        plan = _fallback_address_plan(db)
+        counts = {
+            status: sum(
+                item["verification_status"] == status for item in plan
+            )
+            for status in ("catch_all", "unknown")
+        }
+        if not args.apply:
+            _json(
+                {
+                    "would_requeue": len(plan),
+                    "counts": counts,
+                    "provider_actions": False,
+                }
+            )
+            return 0
+        enqueued = 0
+        for item in plan:
+            if db.enqueue_work(
+                "scout.sequence.sync",
+                f"policy:fallback-address-v1:{item['sequence_id']}",
+                {
+                    "sequence": item["sequence"],
+                    "recipient": item["recipient"],
+                },
+            ):
+                enqueued += 1
+        _json(
+            {
+                "eligible": len(plan),
+                "counts": counts,
+                "enqueued": enqueued,
+            }
+        )
+        return 0
+    if args.command == "reconcile-role-fallbacks":
+        db = Database(settings.database_path)
+        plan = _sole_email_role_plan(db)
+        low_role_count = sum(item["role_score"] < 70 for item in plan)
+        if not args.apply:
+            _json(
+                {
+                    "would_requeue": len(plan),
+                    "sole_address_low_role": low_role_count,
+                    "stale_role_block": len(plan) - low_role_count,
+                    "provider_actions": False,
+                }
+            )
+            return 0
+        enqueued = 0
+        for item in plan:
+            if db.enqueue_work(
+                "scout.sequence.sync",
+                f"policy:sole-email-role-v1:{item['sequence_id']}",
+                {
+                    "sequence": item["sequence"],
+                    "recipient": item["recipient"],
+                },
+            ):
+                enqueued += 1
+        _json(
+            {
+                "eligible": len(plan),
+                "sole_address_low_role": low_role_count,
+                "stale_role_block": len(plan) - low_role_count,
+                "enqueued": enqueued,
+            }
+        )
         return 0
     if args.command == "reconcile-csv":
         contacts = contacts_from_csv(args.csv, args.run_id)

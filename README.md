@@ -144,6 +144,90 @@ uv run scout/pipeline.py --apify
 
 Apollo credits are only spent when `--apollo-go` is present.
 
+### Treg fallback after Grok
+
+Enable `TREG_FALLBACK_ENABLED=true` on the persistent Mac, or pass `--treg-go`.
+After Grok's public contact research, companies still without a usable email go
+through Treg: cached people first, exact company/domain discovery, free coverage
+counts, Icypeas plus independent free LeadsForge search, up to three people per search, then an email-provider waterfall capped at
+$0.025 per lookup. Catch-all/unknown and former-employer addresses remain fallbacks;
+role is a preference and a sole distinct usable address is sufficient.
+
+`TREG_BUDGET_USD` / `--treg-budget-usd` defaults to $5 per monthly daily-pipeline
+cache, including reservations and resumed requests. The client also retains a
+$5.05 balance floor. Every paid request has a persisted idempotency key; provider
+errors and budget deferrals are separate from no-match results. Authentication
+uses `TREG_TOKEN` or the existing local Treg CLI login. Secrets never enter exports.
+Completed lookups refresh after 30 days; uncertain retries reuse their original
+idempotency key. A recovered alternate address has a separate verification identity.
+Domain discovery tries two free providers. Newly searched people require an exact
+company-domain match; a previously sourced person plus LinkedIn can be used without
+a domain. Same-name properties/companies alone are recorded as `needs_identity`.
+When article context is available, a $0.005 Exa ownership lookup can resolve the
+remaining identity: an exact quote from a retrieved official-domain citation and
+an explicit link to the opportunity are required. These calls share the same cap.
+
+Recover the existing sales backlog without recrawling articles or repeating Grok:
+
+```bash
+uv run python skills/aether-bulk-enrichment/scripts/bulk_enrich.py \
+  --since 2026-01-01 --until 2026-09-05 \
+  --output results/backfills/treg-recovery-20260906 \
+  --recover-sales-with-treg aether_sales.sqlite --treg-go \
+  --treg-budget-usd 5 --workers 3 --apply-recovered-leads
+```
+
+The saved inventory defines the company cohort; dates label the historical request
+and do not filter this existing-sales mode. Repeating the command resumes it.
+Use `--refresh-sales-inventory` to include newly missing or invalid-only companies;
+the prior inventory is archived and the same paid-request ledger is retained.
+`inventory.json`, per-company results, `leads.csv`, `summary.json`, and a validated
+`sales_handoff.json` retain coverage and evidence. `--apply-recovered-leads` enqueues
+the existing provider synchronization flow; it does not approve or enroll a campaign.
+`recovered-leads.csv` contains only the currently usable recovered contacts;
+`leads.csv` also includes unresolved opportunities. Warmy verification is paced
+across workers, and HTTP 429 deferrals do not exhaust the job retry budget.
+For manually reviewed named emails already present in cached official citations,
+add `--import-reviewed-treg-contacts reviewed.json` to the recovery command. This
+makes no paid calls, validates the person/email/quote against the cached source,
+retains the review and prior result, and imports only the reviewed batch. The JSON
+rows require company ID, name, title, email, corporate domain, source URL, exact
+source quote and an operator-reviewed opportunity relationship note.
+To refresh the exports after live verification or suppression changes, use
+`--export-treg-recovery` with the same output and sales DB. This local-only mode
+requires no `--treg-go`, makes no provider calls, and does not enqueue work.
+Use `--treg-cache-only` to retry the recovery cohort entirely from cached Treg
+responses. Cache misses remain explicit; even free provider calls are disabled.
+Preview and later apply are resumable: `--apply-recovered-leads` imports only newly
+recovered contacts not already present, avoiding re-enqueuing the whole cohort.
+
+Resolver v6 treats provider/historical domains as unverified hints whenever an
+opportunity is supplied. Official evidence must confirm the original named target;
+landlord/owner alternatives remain separate `related_route` research records.
+`reviewed-identities.json` in the recovery folder can supply reviewed corrections
+with a company ID, official domain, source URL, exact cached source quote and
+relationship note. Optional `people_domains` are reviewer-attested employer-domain
+aliases, not permission to match an arbitrary same-name business. Optional `inboxes`
+require their own exact official source, quote and scope. Shared mailboxes are
+labeled explicitly and use `Hi team`, never a fabricated person's name. Official
+identity responses can also supply published general/contact/procurement inboxes
+as a last fallback. Suppression and invalid-email checks still apply.
+
+Named people searches rank role and local geography, retrieve up to 12 people per
+page and follow at most three Icypeas pages per filter. The live catalog is checked
+against the per-call ceiling for every page; the original total budget and balance
+floor remain unchanged. Corrected identity inputs invalidate cached no-match
+decisions. Prior result snapshots, `identity-review-queue.json`, and
+`recovered-identity-audit.json` preserve unresolved and legacy identity checks;
+the latter is a review list, not proof that all listed contacts are wrong.
+Confirmed wrong-company routes are recorded in `identity-exclusions.json` with
+exact company/email/domain and evidence. Applying recovery blocks those specific
+sequences and persists company-scoped exclusions checked during both sync and
+enrollment. It does not mark a working mailbox globally invalid, unsubscribe its
+owner, delete the prospect, or reject other contacts at the correct company.
+Fresh bulk recipient enrichment also accepts `--treg-go`; completed older bulk
+revisions should use the existing-sales recovery mode to preserve their manifests.
+
 ## Sales automation integration
 
 The integration stays outside Scout's authoritative database:
@@ -166,7 +250,46 @@ until the deterministic primary recipient passes all eligibility gates. Backup
 recipients remain research records and are never enrolled. `contact_candidate_id`
 is provenance rather than CRM identity, so a later source correction does not create
 another event Lead. Warmy prospects are reused by normalized email and are created
-only after a standalone valid verification result.
+after a standalone verification attempt. Valid addresses are preferred, while
+catch-all and unknown results remain sendable fallbacks when they are the best
+available address. An organization-domain mismatch is retained as a lower-ranked
+fallback instead of being discarded. A below-threshold role is also allowed when it
+is the only address found for the company. Explicit invalid results, missing-MX domains,
+disposable domains, suppressions, opt-outs, bounces, and duplicate protections remain
+hard stops.
+
+Recipient admission is shared by the daily Scout, bulk enrichment, Treg recovery,
+historical reconciliation, and provider integration. It deliberately separates:
+
+- hard failures: invalid/disposable addresses, explicit suppressions, and an
+  evidence-backed company/email identity exclusion;
+- selection preferences: current-employer domain, role fit, local scope, source,
+  verification confidence, and evidence strength;
+- soft fallback signals: catch-all/unknown mailbox status, employer-domain mismatch,
+  low role score, shared mailbox, and unresolved geography.
+
+Soft signals stay on the recipient rationale and trigger better-match research; they
+do not delete the only usable address. Treg returns the best current-domain result
+when it finds one and otherwise preserves the prior non-invalid address as a labeled
+fallback. Company profiles also persist the article company's exact relationship
+(operator/owner, property manager, developer, contractor, broker, tenant, project,
+or unknown), confidence, sources, and outreach route through the sales handoff.
+Project/organization ambiguity is retained for review rather than being silently
+converted to an unrelated landlord, developer, contractor, or namesake.
+
+Accuracy findings are scoped to an exact company/email pair. An identity exclusion
+is a hard stop for that pairing; an accuracy review hold pauses that pairing without
+globally suppressing the mailbox. Enrollment rechecks both guards at action time.
+
+Existing sequences blocked only by the former catch-all/unknown rule can be previewed
+and idempotently re-queued under the current fallback policy:
+
+```bash
+uv run python -m integration.cli reconcile-fallback-addresses
+uv run python -m integration.cli reconcile-fallback-addresses --apply
+uv run python -m integration.cli reconcile-role-fallbacks
+uv run python -m integration.cli reconcile-role-fallbacks --apply
+```
 
 Run the default-off configuration check:
 

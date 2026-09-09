@@ -29,6 +29,8 @@ import config
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description=__doc__)
     value.add_argument("--workers", type=int, default=5)
+    value.add_argument("--treg-go", action="store_true", default=config.TREG_FALLBACK_ENABLED, help="use Treg when Grok finds no usable email")
+    value.add_argument("--treg-budget-usd", type=float, default=config.TREG_BUDGET_USD, help="cumulative Treg cache spend ceiling, including resumes")
     value.add_argument(
         "--discover-states",
         type=int,
@@ -90,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         resume=args.resume,
         retry_review=args.retry_review,
         apollo_go=args.apollo_go,
+        treg_go=args.treg_go,
+        treg_budget_usd=args.treg_budget_usd,
         apollo_phones=args.apollo_phones,
         phone_webhook=os.environ.get("APOLLO_WEBHOOK_URL", ""),
         newsapi=args.newsapi,

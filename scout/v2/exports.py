@@ -353,6 +353,10 @@ class ExportService:
                 domain=profile.domain,
                 aliases=profile.aliases,
                 legacy_ids=profile.organization_ids,
+                relationship_type=profile.relationship_type,
+                relationship_confidence=profile.relationship_confidence,
+                relationship_sources=profile.relationship_sources,
+                outreach_route=profile.outreach_route,
             )
             for profile in profiles
         ]
