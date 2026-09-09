@@ -16,7 +16,7 @@ steps:
   - stepIndex: 0
     type: email
     subject: TODO_APPROVED_COPY_DAY_0_SUBJECT
-    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_0_HTML</p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
+    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_0_HTML</p><p><img src=\"{{AETHER_SIGNATURE_LOGO_URL}}\" alt=\"Aether Facility Services logo\" width=\"160\" style=\"display:block;max-width:160px;height:auto;\"></p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
     bodyText: "TODO_APPROVED_COPY_DAY_0_TEXT\n\nUnsubscribe: {{unsubscribeUrl}}\n{{AETHER_POSTAL_ADDRESS}}"
     delayDays: 0
     delayHours: 0
@@ -24,7 +24,7 @@ steps:
   - stepIndex: 1
     type: email
     subject: TODO_APPROVED_COPY_DAY_3_SUBJECT
-    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_3_HTML</p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
+    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_3_HTML</p><p><img src=\"{{AETHER_SIGNATURE_LOGO_URL}}\" alt=\"Aether Facility Services logo\" width=\"160\" style=\"display:block;max-width:160px;height:auto;\"></p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
     bodyText: "TODO_APPROVED_COPY_DAY_3_TEXT\n\nUnsubscribe: {{unsubscribeUrl}}\n{{AETHER_POSTAL_ADDRESS}}"
     delayDays: 3
     delayHours: 0
@@ -32,7 +32,7 @@ steps:
   - stepIndex: 2
     type: email
     subject: TODO_APPROVED_COPY_DAY_7_SUBJECT
-    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_7_HTML</p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
+    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_7_HTML</p><p><img src=\"{{AETHER_SIGNATURE_LOGO_URL}}\" alt=\"Aether Facility Services logo\" width=\"160\" style=\"display:block;max-width:160px;height:auto;\"></p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
     bodyText: "TODO_APPROVED_COPY_DAY_7_TEXT\n\nUnsubscribe: {{unsubscribeUrl}}\n{{AETHER_POSTAL_ADDRESS}}"
     delayDays: 4
     delayHours: 0
@@ -40,7 +40,7 @@ steps:
   - stepIndex: 3
     type: email
     subject: TODO_APPROVED_COPY_DAY_14_SUBJECT
-    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_14_HTML</p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
+    bodyHtml: "<p>TODO_APPROVED_COPY_DAY_14_HTML</p><p><img src=\"{{AETHER_SIGNATURE_LOGO_URL}}\" alt=\"Aether Facility Services logo\" width=\"160\" style=\"display:block;max-width:160px;height:auto;\"></p><p><a href=\"{{unsubscribeUrl}}\">Unsubscribe</a></p><p>{{AETHER_POSTAL_ADDRESS}}</p>"
     bodyText: "TODO_APPROVED_COPY_DAY_14_TEXT\n\nUnsubscribe: {{unsubscribeUrl}}\n{{AETHER_POSTAL_ADDRESS}}"
     delayDays: 7
     delayHours: 0

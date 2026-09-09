@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .config import ActivationBlocked, Settings
 
 COPY_PLACEHOLDER = "TODO_APPROVED_COPY"
+SIGNATURE_LOGO_PLACEHOLDER = "{{AETHER_SIGNATURE_LOGO_URL}}"
 BODY_MERGE_VARIABLES = {"firstName", "company", "whyLine", "unsubscribeUrl"}
 SUBJECT_MERGE_VARIABLES = {"firstName", "company"}
 
@@ -95,6 +96,10 @@ def load_campaign(path: str | Path, settings: Settings) -> CampaignManifest:
         raise ActivationBlocked("EMAIL_TEMPLATES_APPROVED is not enabled")
     if not settings.postal_address:
         raise ActivationBlocked("AETHER_POSTAL_ADDRESS is required")
+    if not settings.signature_logo_url.startswith("https://"):
+        raise ActivationBlocked(
+            "PUBLIC_BASE_URL (HTTPS) is required for signature logo"
+        )
     for index, step in enumerate(raw.get("steps") or []):
         if "{{AETHER_POSTAL_ADDRESS}}" not in str(
             step.get("bodyHtml") or ""
@@ -102,7 +107,12 @@ def load_campaign(path: str | Path, settings: Settings) -> CampaignManifest:
             raise ActivationBlocked(
                 f"step {index} is missing the postal-address placeholder"
             )
+        if SIGNATURE_LOGO_PLACEHOLDER not in str(step.get("bodyHtml") or ""):
+            raise ActivationBlocked(
+                f"step {index} is missing the signature-logo placeholder"
+            )
     raw = _replace(raw, "{{AETHER_POSTAL_ADDRESS}}", settings.postal_address)
+    raw = _replace(raw, SIGNATURE_LOGO_PLACEHOLDER, settings.signature_logo_url)
     manifest = CampaignManifest.model_validate(raw)
     if len(manifest.mailboxIds) != 6:
         raise ActivationBlocked(

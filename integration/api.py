@@ -7,15 +7,20 @@ import hashlib
 import hmac
 import json
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from .config import Settings
 from .database import Database
 from .security import SignatureError, verify_unsubscribe_token, verify_warmy_signature
 from .workflows import SalesWorkflows
+
+AETHER_SIGNATURE_LOGO = (
+    Path(__file__).resolve().parent / "assets" / "aether-signature-logo.png"
+)
 
 
 def create_app(settings: Settings | None = None, db=None, workflows=None) -> FastAPI:
@@ -43,6 +48,16 @@ def create_app(settings: Settings | None = None, db=None, workflows=None) -> Fas
             "campaign_activation_ready": settings.campaign_activation_ready,
             "campaign_enrollment_ready": settings.campaign_enrollment_ready,
         }
+
+    @app.get("/assets/aether-signature-logo.png")
+    def aether_signature_logo() -> FileResponse:
+        if not AETHER_SIGNATURE_LOGO.exists():
+            raise HTTPException(status_code=404, detail="signature logo unavailable")
+        return FileResponse(
+            AETHER_SIGNATURE_LOGO,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     @app.post("/webhooks/warmy")
     async def warmy_webhook(request: Request) -> dict[str, Any]:

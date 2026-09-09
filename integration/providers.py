@@ -237,6 +237,17 @@ class WarmyClient:
             write=True,
         )
 
+    def update_campaign(
+        self, campaign_id: str, manifest: dict[str, Any], operation_key: str
+    ) -> dict:
+        return self._request(
+            "PATCH",
+            f"campaigns/{campaign_id}",
+            payload=manifest,
+            idempotency_key=operation_key,
+            write=True,
+        )
+
     def start_campaign(self, campaign_id: str, operation_key: str) -> dict:
         self.settings.require_campaign_activation()
         return self._request(
