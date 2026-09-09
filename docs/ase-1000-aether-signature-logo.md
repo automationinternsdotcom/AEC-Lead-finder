@@ -38,8 +38,9 @@ tracking for campaign analytics by enabling `trackOpens`.
   patched from the same approved manifest instead of always creating a new draft.
 - Added `verify-campaign-signature` so the live Warmy campaign can be checked
   for the hosted logo and full Jordan signature after sync.
-- Added validation so an approved campaign cannot load without the logo placeholder
-  or with a non-HTTPS public base URL.
+- The logo is optional in approved copy. When using the logo placeholder, set
+  `AETHER_SIGNATURE_LOGO_URL` to a public HTTPS asset, or use the HTTPS sales-API
+  asset default. Text-only signatures do not require a logo host.
 
 ## WarmySender Sync
 
@@ -50,24 +51,14 @@ and all four email steps include the logo plus the full Jordan Whitehurst
 signature. The immediate live sync used this commit-pinned logo URL:
 `https://raw.githubusercontent.com/automationinternsdotcom/AEC-Lead-finder/14a9c18ff211f15f965ae5aa181073592d3e3cae/integration/assets/aether-signature-logo.png`.
 
-After this branch is merged on the persistent Mac with production `.env` values,
-patch the existing Warmy campaign if it is in draft or paused status:
+Do not automatically patch or replace the campaign after merging code. The live
+Aether campaign now uses approved A/B subjects; the single-manifest API does not
+cover that state. Resolve an update failure on the existing campaign using a
+capable surface. A replacement requires an explicitly planned migration of its
+audience, suppression/reply state, history, and variant configuration.
 
-```bash
-uv run python -m integration.cli update-campaign config/aether_campaign.yaml --apply
-```
-
-Warmy rejects template edits on running campaigns. If the existing campaign cannot
-be patched, create a fresh draft from the approved manifest:
-
-```bash
-uv run python -m integration.cli create-campaign-draft config/aether_campaign.yaml --apply
-```
-
-Then set the returned `campaign_id` and `manifest_hash` as the runtime
-`WARMY_CAMPAIGN_ID` and `WARMY_CAMPAIGN_MANIFEST_HASH`. That is the step that makes
-the repository changes visible inside WarmySender and allows enrollment hash
-validation to pass.
+See `docs/campaign-variant-verification.md` for the canonical subject plan and
+source-backed verification. Do not promote a base-only hash as proof of A/B state.
 
 Verify the reflected Warmy payload:
 

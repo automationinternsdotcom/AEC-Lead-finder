@@ -262,6 +262,10 @@ class WarmyClient:
 
     def start_campaign(self, campaign_id: str, operation_key: str) -> dict:
         self.settings.require_campaign_activation()
+        from .database import Database
+        from .variants import require_verified
+        require_verified(Database(self.settings.database_path), campaign_id,
+                         self.settings.warmy_campaign_manifest_hash)
         return self._request(
             "POST",
             f"campaigns/{campaign_id}/start",

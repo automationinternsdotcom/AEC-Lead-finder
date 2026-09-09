@@ -237,7 +237,7 @@ def _verify_campaign_signature_payload(
     for index, step in enumerate(steps):
         body_html = str(step.get("bodyHtml") or "")
         step_index = int(step.get("stepIndex", index))
-        if expected_logo_url not in body_html:
+        if expected_logo_url and expected_logo_url not in body_html:
             missing_logo_steps.append(step_index)
         if not all(part in body_html for part in signature_parts):
             missing_signature_steps.append(step_index)
@@ -260,8 +260,9 @@ def _require_safe_campaign_update(campaign_id: str, campaign: dict[str, Any], fi
     if str(campaign.get("status") or "").casefold() not in {"draft", "paused"}:
         raise ActivationBlocked("Campaign updates require a draft or paused campaign")
     fingerprint = json.loads(fingerprint_path.read_text()) if fingerprint_path.exists() else {}
-    if (fingerprint.get("campaign_id") == campaign_id
-            and fingerprint.get("ui_verified_subject_variants")):
+    from .variants import load_plan
+    if (load_plan().campaign_id == campaign_id or (fingerprint.get("campaign_id") == campaign_id
+            and fingerprint.get("ui_verified_subject_variants"))):
         raise ActivationBlocked(
             "This campaign has separately managed A/B subject variants; the manifest API cannot "
             "preserve or verify them. Use a variant-capable edit surface, then re-verify the fingerprint."
@@ -271,6 +272,9 @@ def _require_safe_campaign_update(campaign_id: str, campaign: dict[str, Any], fi
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    variants = commands.add_parser("verify-campaign-variants")
+    variants.add_argument("observation", type=Path)
+    variants.add_argument("--apply", action="store_true", help="Store verified observation locally; no campaign mutation")
 
     enqueue = commands.add_parser("enqueue-contacts")
     enqueue.add_argument("csv")
@@ -307,6 +311,7 @@ def main() -> int:
 
     verify_campaign = commands.add_parser("verify-campaign-signature")
     verify_campaign.add_argument("--campaign-id", default="")
+    verify_campaign.add_argument("--text-only", action="store_true", help="Verify an approved text-only signature without requiring a logo")
 
     start = commands.add_parser("start-campaign")
     start.add_argument("--apply", action="store_true")
@@ -319,6 +324,19 @@ def main() -> int:
     role_fallbacks.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     settings = Settings.from_env()
+    if args.command == "verify-campaign-variants":
+        from .variants import load_plan, verify_observation
+        plan = load_plan()
+        if plan.campaign_id != settings.warmy_campaign_id:
+            raise ActivationBlocked("Variant plan belongs to a different campaign")
+        observation = json.loads(args.observation.read_text())
+        result = verify_observation(plan, observation, settings.warmy_campaign_manifest_hash)
+        if args.apply:
+            Database(settings.database_path).set_state(
+                "campaign-variant-observation:" + plan.campaign_id, observation
+            )
+        _json({**result, "stored": args.apply})
+        return 0
 
     if args.command == "validate-handoff":
         handoff = load_handoff(args.handoff)
@@ -583,7 +601,7 @@ def main() -> int:
                 {
                     "campaign_id": campaign_id,
                     **_verify_campaign_signature_payload(
-                        campaign, settings.signature_logo_url
+                        campaign, "" if args.text_only else settings.signature_logo_url
                     ),
                 }
             )
@@ -600,6 +618,9 @@ def main() -> int:
             )
             return 0
         settings.require_campaign_activation()
+        from .variants import require_verified
+        require_verified(Database(settings.database_path), settings.warmy_campaign_id,
+                         settings.warmy_campaign_manifest_hash)
         warmy = WarmyClient(settings)
         try:
             _json(

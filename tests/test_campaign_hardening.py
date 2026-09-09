@@ -68,20 +68,21 @@ def test_approved_campaign_copy_has_disclosure_and_safe_step_invariants():
     )
 
 
-def test_campaign_loader_requires_hosted_signature_logo(tmp_path):
+def test_campaign_loader_accepts_text_only_signature_and_external_logo(tmp_path):
     source = CAMPAIGN.read_text(encoding="utf-8")
     path = tmp_path / "campaign.yaml"
     path.write_text(
         source.replace(
             SIGNATURE_LOGO_TAG,
             "",
-            1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ActivationBlocked, match="signature-logo placeholder"):
-        load_campaign(path, _settings())
+    assert load_campaign(path, _settings(public_base_url="http://localhost:8187"))
+    external = load_campaign(CAMPAIGN, _settings(public_base_url="http://localhost:8187",
+                            signature_logo_override="https://cdn.example.com/logo.png"))
+    assert all('src="https://cdn.example.com/logo.png"' in step.bodyHtml for step in external.steps)
 
     with pytest.raises(ActivationBlocked, match="PUBLIC_BASE_URL"):
         load_campaign(CAMPAIGN, _settings(public_base_url="http://localhost:8187"))

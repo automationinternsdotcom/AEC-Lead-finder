@@ -93,6 +93,32 @@ def test_qualified_judgment_requires_date_and_normalizes_numeric_confidence():
     assert judgment.confidence == "high"
 
 
+def test_missing_operator_is_recoverable_review_not_terminal_rejection(tmp_path):
+    store, artifacts = setup(tmp_path)
+    item = candidate()
+    store.save_candidate(item)
+    service = QualificationService(store, artifacts, "grok-4.3")
+    payload = JudgmentPayload.model_validate({"qualified": False,
+        "filter_reason": "Specific project; operator not yet identified", "identity_uncertain": True})
+    event, person, review, rejected_id = service._apply_payload(item, payload)
+    assert event is None and person is None
+    assert review.reason_code == "property_identity_unresolved"
+    assert rejected_id == ""
+    assert "never a definitive rejection" in __import__("v2.qualification", fromlist=["QUALIFICATION_PROMPT"]).QUALIFICATION_PROMPT
+
+
+def test_named_project_with_contractor_relationship_can_qualify(tmp_path):
+    store, artifacts = setup(tmp_path)
+    item = candidate()
+    store.save_candidate(item)
+    payload = valid_payload()
+    payload.update(business_name="Acme Project", event="Contractor starts construction at the named project")
+    event, _, review, rejected_id = QualificationService(store, artifacts, "grok-4.3")._apply_payload(
+        item, JudgmentPayload.model_validate(payload))
+    assert event is not None and review is None and not rejected_id
+    assert "referral or construction-closeout" in LEAD_GUIDANCE
+
+
 def test_qualification_uses_configured_workers(tmp_path):
     store, artifacts = setup(tmp_path)
     items = [
