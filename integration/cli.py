@@ -219,6 +219,55 @@ def _sole_email_role_plan(db: Database) -> list[dict[str, Any]]:
     return planned
 
 
+def _verify_campaign_signature_payload(
+    campaign: dict[str, Any], expected_logo_url: str
+) -> dict[str, Any]:
+    steps = campaign.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise ActivationBlocked("Warmy campaign has no steps")
+    signature_parts = (
+        "Jordan Whitehurst, Partner",
+        "Aether Facility Services, LLC",
+        "O: (602) 612-6393",
+        "M: (813) 992-0858",
+        "2120 W Encanto Blvd, Phoenix, AZ 85009",
+    )
+    missing_logo_steps: list[int] = []
+    missing_signature_steps: list[int] = []
+    for index, step in enumerate(steps):
+        body_html = str(step.get("bodyHtml") or "")
+        step_index = int(step.get("stepIndex", index))
+        if expected_logo_url not in body_html:
+            missing_logo_steps.append(step_index)
+        if not all(part in body_html for part in signature_parts):
+            missing_signature_steps.append(step_index)
+    if missing_logo_steps or missing_signature_steps:
+        errors: list[str] = []
+        if missing_logo_steps:
+            errors.append(f"missing logo in steps {missing_logo_steps}")
+        if missing_signature_steps:
+            errors.append(f"missing signature in steps {missing_signature_steps}")
+        raise ActivationBlocked("Warmy signature verification failed: " + ", ".join(errors))
+    return {
+        "status": "verified",
+        "steps": len(steps),
+        "signature_logo_url": expected_logo_url,
+        "track_opens": bool(campaign.get("trackOpens")),
+    }
+
+
+def _require_safe_campaign_update(campaign_id: str, campaign: dict[str, Any], fingerprint_path: Path) -> None:
+    if str(campaign.get("status") or "").casefold() not in {"draft", "paused"}:
+        raise ActivationBlocked("Campaign updates require a draft or paused campaign")
+    fingerprint = json.loads(fingerprint_path.read_text()) if fingerprint_path.exists() else {}
+    if (fingerprint.get("campaign_id") == campaign_id
+            and fingerprint.get("ui_verified_subject_variants")):
+        raise ActivationBlocked(
+            "This campaign has separately managed A/B subject variants; the manifest API cannot "
+            "preserve or verify them. Use a variant-capable edit surface, then re-verify the fingerprint."
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -250,6 +299,14 @@ def main() -> int:
     campaign = commands.add_parser("create-campaign-draft")
     campaign.add_argument("manifest")
     campaign.add_argument("--apply", action="store_true")
+
+    update_campaign = commands.add_parser("update-campaign")
+    update_campaign.add_argument("manifest")
+    update_campaign.add_argument("--campaign-id", default="")
+    update_campaign.add_argument("--apply", action="store_true")
+
+    verify_campaign = commands.add_parser("verify-campaign-signature")
+    verify_campaign.add_argument("--campaign-id", default="")
 
     start = commands.add_parser("start-campaign")
     start.add_argument("--apply", action="store_true")
@@ -460,6 +517,74 @@ def main() -> int:
                     "manifest_hash": manifest_hash,
                     "campaign": verified,
                     "mailbox_verification": mailbox_verification,
+                }
+            )
+        finally:
+            warmy.close()
+        return 0
+    if args.command == "update-campaign":
+        manifest = load_campaign(args.manifest, settings)
+        manifest_hash = campaign_manifest_hash(manifest)
+        campaign_id = (args.campaign_id or settings.warmy_campaign_id).strip()
+        if not campaign_id:
+            raise ActivationBlocked("WARMY_CAMPAIGN_ID is required")
+        if not args.apply:
+            _json(
+                {
+                    "would_update": campaign_id,
+                    "manifest": manifest.model_dump(mode="json"),
+                    "manifest_hash": manifest_hash,
+                }
+            )
+            return 0
+        settings.require_provider_writes()
+        warmy = WarmyClient(settings)
+        try:
+            operation_key = f"aether-campaign-update-v1:{campaign_id}:{manifest_hash}"
+            before = warmy.get_campaign(campaign_id)
+            _require_safe_campaign_update(
+                campaign_id, _campaign_data(before),
+                Path(__file__).resolve().parents[1] / "config/daily_campaign_fingerprint.json",
+            )
+            Database(settings.database_path).set_state(
+                operation_key + ":before", before
+            )
+            warmy.update_campaign(
+                campaign_id,
+                manifest.model_dump(mode="json"),
+                operation_key,
+            )
+            campaign_id, verified, mailbox_verification = _verify_campaign_draft(
+                warmy,
+                {"data": {"id": campaign_id}},
+                manifest_hash,
+                manifest.model_dump(mode="json"),
+            )
+            _json(
+                {
+                    "campaign_id": campaign_id,
+                    "manifest_hash": manifest_hash,
+                    "campaign": verified,
+                    "mailbox_verification": mailbox_verification,
+                }
+            )
+        finally:
+            warmy.close()
+        return 0
+    if args.command == "verify-campaign-signature":
+        campaign_id = (args.campaign_id or settings.warmy_campaign_id).strip()
+        if not campaign_id:
+            raise ActivationBlocked("WARMY_CAMPAIGN_ID is required")
+        warmy = WarmyClient(settings)
+        try:
+            response = warmy.get_campaign(campaign_id)
+            campaign = _campaign_data(response)
+            _json(
+                {
+                    "campaign_id": campaign_id,
+                    **_verify_campaign_signature_payload(
+                        campaign, settings.signature_logo_url
+                    ),
                 }
             )
         finally:

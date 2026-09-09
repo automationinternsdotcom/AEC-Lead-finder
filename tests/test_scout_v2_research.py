@@ -101,6 +101,16 @@ def test_former_employer_address_is_soft_fallback_and_current_domain_wins(tmp_pa
     assert selected.contact_candidate_id == "current"
 
 
+def test_verifier_retains_sourced_generic_role_mailboxes(tmp_path):
+    store, _, _, _ = setup(tmp_path)
+    verifier = ContactVerifier(store, mx_lookup=lambda domain: True)
+
+    result = verifier.verify(email="leasing@acme.com", organization_domain="acme.com")
+
+    assert result.status == VerificationStatus.UNKNOWN
+    assert result.reason == "domain_mx_valid_mailbox_unverified"
+
+
 def test_decision_makers_require_sources_and_persist_people(tmp_path):
     store, artifacts, organization, _ = setup(tmp_path)
     payload = {
@@ -119,6 +129,29 @@ def test_decision_makers_require_sources_and_persist_people(tmp_path):
     assert not reviews
     assert people[0].name == "Jane Manager"
     assert store.people("org-1")[0].title == "General Manager"
+
+
+def test_decision_maker_prompt_prioritizes_authority_and_direct_contacts(tmp_path):
+    store, artifacts, organization, _ = setup(tmp_path)
+    calls = []
+    payload = {"decision_makers": [], "employee_count": None, "sources": []}
+    service = DecisionMakerService(
+        store,
+        artifacts,
+        "grok-4.3",
+        call_model=lambda model, prompt, tools: calls.append(prompt)
+        or (json.dumps(payload), {}),
+    )
+
+    service.research([organization])
+
+    prompt = calls[0]
+    assert "Known domain: acme.com" in prompt
+    assert "property/community manager" in prompt
+    assert "facilities manager" in prompt
+    assert "verify their relationship" in prompt
+    assert "retain a sourced company mailbox" in prompt
+    assert "not automatic exclusions" in prompt
 
 
 def test_valid_empty_decision_maker_result_is_terminal(tmp_path):

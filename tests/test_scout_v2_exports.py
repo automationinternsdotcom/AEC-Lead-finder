@@ -136,6 +136,9 @@ def test_export_preserves_legacy_columns_and_only_displays_selected_contacts(
     html = Path(output["paths"]["html"]).read_text()
     assert html.count("Jane Manager") == 1
     assert html.count("Joe Operator") == 1
+    assert "Sales handoff" in html
+    assert "Pipedrive and WarmySender" in html
+    assert "Contacts</span><strong" in html
     assert "Unverified Article Subject" not in html
     assert "REPLACE-" not in html
     assert "qualifying AEC leads" not in html

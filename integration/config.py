@@ -121,6 +121,10 @@ class Settings:
     worker_batch_size: int = 15
     worker_lease_seconds: int = 300
 
+    @property
+    def signature_logo_url(self) -> str:
+        return f"{self.public_base_url}/assets/aether-signature-logo.png"
+
     @classmethod
     def from_env(cls) -> Settings:
         load_dotenv(ENV_FILE, override=False)

@@ -35,12 +35,21 @@ from .state import StateStore
 ModelCall = Callable[[str, str, list[dict]], tuple[str, dict]]
 
 
+LEAD_GUIDANCE = """Qualifying triggers include a specific Arizona commercial property opening, lease-up, tenant relocation, ownership acquisition by the buyer/new owner, construction start, completion, approved development, permit, rezoning, expansion, renovation, redevelopment, or other property-level operational change.
+Reject macro market reports, opinion columns, broker/vendor awards, generic company news, seller-only listings, financing without a named property use, out-of-state projects, residential-only single-family work, and articles where the property/operator cannot be identified.
+Choose business_name as the entity most likely to buy or influence facilities services: operator, tenant, owner, property manager, developer, or community/asset name. Do not use the publisher, broker, seller, architect, or contractor unless that entity is the operator/owner/manager.
+service_angle must name a concrete Aether fit such as recurring janitorial, common-area cleaning, day porter, evening/overnight cleaning, turnover/lease-up support, pressure washing, floor care, or maintenance coordination."""
+
+
 QUALIFICATION_PROMPT = """Open and read the exact article URL below using web search. Determine whether it reports a specific Arizona commercial-property event that could create a facilities-services opportunity. Never infer rejection from missing data.
 
 Candidate ID: {candidate_id}
 URL: {url}
 Title: {title}
 Requested article window: {window_start} through {window_end}, inclusive.
+
+Guidance:
+{lead_guidance}
 
 Return strict JSON with these keys:
 qualified, business_name, person, event, date_posted, location, summary, state,
@@ -52,6 +61,9 @@ For an explicit non-qualifying article or an article published outside the reque
 BATCH_QUALIFICATION_PROMPT = """Qualify this bounded batch using only the supplied saved article evidence. Do not search the web and do not identify people. For every exact candidate_id, decide whether the article reports a specific Arizona commercial-property event that creates a facilities-services opportunity.
 
 Requested article window: {window_start} through {window_end}, inclusive.
+
+Guidance:
+{lead_guidance}
 
 Return strict JSON only as one object mapping every exact candidate_id to an object with keys: qualified, business_name, event, date_posted, location, summary, state, priority, property_type, service_angle, filter_reason, confidence. date_posted must be YYYY-MM-DD or an empty string, never a timestamp. Include every submitted ID exactly once and invent no IDs. An explicit rejection or an article outside the requested window requires a specific filter_reason. A qualification requires a date inside the requested window, state Arizona, priority high or medium, confidence high or low, and nonempty business_name, event, and location.
 
@@ -236,6 +248,7 @@ class QualificationService:
         prompt = BATCH_QUALIFICATION_PROMPT.format(
             window_start=self.window_start or "not specified",
             window_end=self.window_end or "not specified",
+            lead_guidance=LEAD_GUIDANCE,
             candidates=json.dumps(payload, sort_keys=True, ensure_ascii=False),
         )
         request = self.artifacts.write_raw(
@@ -358,6 +371,7 @@ class QualificationService:
             title=candidate.title,
             window_start=self.window_start or "not specified",
             window_end=self.window_end or "not specified",
+            lead_guidance=LEAD_GUIDANCE,
         )
         request = self.artifacts.write_raw(
             "qualify", f"{attempt_id}-request.json", {"model": self.model, "prompt": prompt}

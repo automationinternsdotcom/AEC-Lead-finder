@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "scout"))
 
 from v2.artifacts import ArtifactStore  # noqa: E402
 from v2.contracts import DiscoveryCandidate, RecordStatus  # noqa: E402
-from v2.qualification import JudgmentPayload, QualificationService  # noqa: E402
+from v2.qualification import BATCH_QUALIFICATION_PROMPT, JudgmentPayload, LEAD_GUIDANCE, QualificationService  # noqa: E402
 from v2.state import StateStore  # noqa: E402
 
 
@@ -62,6 +62,21 @@ def valid_payload():
         "filter_reason": "A new operating property needs facilities support.",
         "confidence": "high",
     }
+
+
+def test_qualification_prompt_guidance_names_useful_triggers_and_rejections():
+    prompt = BATCH_QUALIFICATION_PROMPT.format(
+        window_start="2026-08-27",
+        window_end="2026-08-28",
+        lead_guidance=LEAD_GUIDANCE,
+        candidates="[]",
+    )
+
+    assert "permit" in prompt
+    assert "rezoning" in prompt
+    assert "operator, tenant, owner, property manager" in prompt
+    assert "macro market reports" in prompt
+    assert "day porter" in prompt
 
 
 def test_qualified_judgment_requires_date_and_normalizes_numeric_confidence():

@@ -103,11 +103,31 @@ def section(kicker, title, blurb, rows, contacts, styles=""):
     )
 
 
-def page(sections):
+def status_bar(priority_count=0, nurture_count=0, contact_count=0):
+    items = (
+        ("Priority", priority_count),
+        ("Review", nurture_count),
+        ("Contacts", contact_count),
+    )
+    cells = "".join(
+        f'<td style="padding:0 14px 0 0;white-space:nowrap"><span style="display:block;color:#a8e0c5;font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:bold">{label}</span><strong style="color:#ffffff;font-size:18px;line-height:1.2">{value}</strong></td>'
+        for label, value in items
+    )
+    return (
+        f'<table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:16px;border-collapse:collapse"><tbody><tr>{cells}</tr></tbody></table>'
+    )
+
+
+def page(sections, priority_count=0, nurture_count=0, contact_count=0, sales_handoff=True):
     feedback_copy = (
         f'<div style="margin-top:10px;color:#e8f4ef;font-size:13px;line-height:1.55">After reviewing an article, click <strong style="color:#a8e0c5">Good opportunity</strong> or <strong style="color:#ffb7aa">Not a fit</strong>; each choice helps improve future lead scoring.</div>'
         if os.environ.get("AETHER_FEEDBACK_BASE_URL", "").strip()
         else '<div style="margin-top:10px;color:#e8f4ef;font-size:13px;line-height:1.55">Daily reviewed AEC property signals, with outreach readiness shown by section.</div>'
+    )
+    handoff_copy = (
+        '<div style="margin-top:12px;color:#d9eee7;font-size:12px;line-height:1.5">Sales handoff: qualified lead records and selected contacts were prepared for ingestion into Pipedrive and WarmySender.</div>'
+        if sales_handoff
+        else ""
     )
     return (
         f'<div style="margin:0;padding:0;background:#eef3f1;color:#233a32">'
@@ -116,8 +136,10 @@ def page(sections):
         f'<tr><td style="background:#123a2d;padding:22px 44px">'
         f'<div style="font-size:12px;line-height:1.2;letter-spacing:1.4px;text-transform:uppercase;color:#a8e0c5;font-weight:bold">Aether AEC Lead Intelligence</div>'
         f'{feedback_copy}'
+        f'{status_bar(priority_count, nurture_count, contact_count)}'
+        f'{handoff_copy}'
         f"</td></tr>{sections}"
         f'<tr><td style="padding:23px 44px 27px;background:#ffffff;border-top:1px solid #e0ebe6;color:{MUTE};font-size:13px;line-height:1.6">'
-        f"<div>Generated from curated AEC news websites.</div>"
+        f"<div>Generated from curated AEC news websites, Grok research artifacts, and the V2 sales handoff export.</div>"
         f"</td></tr></tbody></table></td></tr></tbody></table></div>"
     )

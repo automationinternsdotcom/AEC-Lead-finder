@@ -21,6 +21,7 @@ from v2.discovery import (  # noqa: E402
     FeedRegistry,
     _direct_listing_in_arizona_scope,
     _listing_partition_outside_window,
+    article_score,
     feed_status_after_failure,
     load_curated_sources,
     parse_direct_listing,
@@ -65,6 +66,24 @@ def test_parse_index_finds_articles_and_same_domain_feed():
         )
     ]
     assert parsed.feed_links == ["https://news.example.com/feed.xml"]
+
+
+def test_article_score_uses_anchor_title_for_generic_story_urls():
+    assert article_score(
+        "https://news.example.com/story/12345",
+        "Phoenix industrial warehouse expansion breaks ground",
+        "https://news.example.com",
+    ) >= 3
+    parsed = parse_index(
+        '<a href="/story/12345">Phoenix industrial warehouse expansion breaks ground</a>',
+        "https://news.example.com",
+    )
+    assert parsed.article_links == [
+        (
+            "https://news.example.com/story/12345",
+            "Phoenix industrial warehouse expansion breaks ground",
+        )
+    ]
 
 
 def test_publication_date_prefers_structured_metadata_to_url():

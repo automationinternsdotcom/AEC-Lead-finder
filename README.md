@@ -302,6 +302,30 @@ Warmy campaign exactly matches its approved manifest hash, and an unexpired immu
 approval batch names the exact sequence and merge hash. Campaign approval cannot
 release an older backlog accidentally.
 
+WarmySender campaign templates are not updated by git alone. The existing Aether
+draft has separately managed 50/50 A/B subjects recorded in
+`config/daily_campaign_fingerprint.json`. The YAML contains the initial A subject
+and threaded follow-ups, not a full export of live variant state. The update CLI
+refuses to overwrite this pinned campaign because its API cannot preserve or
+verify the variants. Use a variant-capable edit surface and re-verify the daily
+fingerprint after any approved live change; merging code does not deploy templates.
+
+For other draft/paused campaigns without separately managed variants, after changing
+`config/aether_campaign.yaml`, patch the configured draft or paused campaign and
+promote the returned manifest hash:
+
+```bash
+uv run python -m integration.cli update-campaign config/aether_campaign.yaml --apply
+```
+
+If Warmy rejects the update because the campaign is running, pause it first or create
+a replacement draft with `create-campaign-draft`. Verify the live Warmy payload after
+the update:
+
+```bash
+uv run python -m integration.cli verify-campaign-signature
+```
+
 The interrupted Southwest Value Partners canary has a local-only, idempotent
 reconciliation command. Preview is read-only; apply performs no provider calls:
 

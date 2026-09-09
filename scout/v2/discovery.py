@@ -75,6 +75,58 @@ ARTICLE_HINTS = (
     "office",
     "azre",
     "blog",
+    "buildout",
+    "groundbreaking",
+    "permit",
+    "permits",
+    "redevelopment",
+    "rezoning",
+    "ribbon-cutting",
+    "tenant-improvement",
+)
+TITLE_EVENT_TERMS = (
+    "acquired",
+    "acquisition",
+    "approved",
+    "breaks ground",
+    "completed",
+    "construction",
+    "expands",
+    "expansion",
+    "groundbreaking",
+    "lease",
+    "leased",
+    "opens",
+    "opening",
+    "plans",
+    "redevelopment",
+    "relocates",
+    "renovation",
+    "rezoning",
+    "ribbon cutting",
+    "site acquired",
+)
+TITLE_PROPERTY_TERMS = (
+    "apartments",
+    "campus",
+    "center",
+    "commercial",
+    "community",
+    "development",
+    "facility",
+    "hotel",
+    "industrial",
+    "medical office",
+    "mixed use",
+    "multifamily",
+    "office",
+    "project",
+    "property",
+    "restaurant",
+    "retail",
+    "self storage",
+    "store",
+    "warehouse",
 )
 REJECT_SEGMENTS = {
     "about",
@@ -556,6 +608,16 @@ def article_score(url: str, title: str, base_url: str) -> int:
     if len([word for word in slug_words if word]) >= 4:
         score += 2
     if len(title.strip()) >= 25:
+        score += 1
+    title_text = normalize_text(title)
+    if any(term in title_text for term in TITLE_EVENT_TERMS) and any(
+        term in title_text for term in TITLE_PROPERTY_TERMS
+    ):
+        score += 2
+    if any(
+        re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", title_text)
+        for term in ARIZONA_SCOPE_TERMS
+    ):
         score += 1
     return score
 

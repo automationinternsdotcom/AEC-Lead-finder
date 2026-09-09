@@ -9,26 +9,31 @@ scheduleDays: [1, 2, 3, 4, 5]
 stopOnReply: true
 stopOnBounce: true
 stopOnUnsubscribe: true
-trackOpens: false
+trackOpens: true
 trackClicks: false
 mailboxIds: []
 steps:
   - stepIndex: 0
     type: email
-    subject: "A facilities idea for {{company}}"
+    subject: "{{firstName}}, could we stay in touch about janitorial needs for {{custom.projectPropertyName}}?"
+    sendAsReply: true
+    quotePreviousMessages: true
     bodyHtml: >-
       <p>{{whyLine}}</p>
       <p>This is a commercial message from Aether Facility Services.</p>
-      <p>Jordan Whitehurst<br>Aether Facility Services<br>602-612-6393</p>
+      <p><img src="{{AETHER_SIGNATURE_LOGO_URL}}" alt="Aether Facility Services logo" width="160" style="display:block;max-width:160px;height:auto;"></p>
+      <p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858<br>2120 W Encanto Blvd, Phoenix, AZ 85009</p>
       <p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
     bodyText: |-
       {{whyLine}}
 
       This is a commercial message from Aether Facility Services.
 
-      Jordan Whitehurst
-      Aether Facility Services
-      602-612-6393
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+      2120 W Encanto Blvd, Phoenix, AZ 85009
 
       Unsubscribe: {{unsubscribeUrl}}
       {{AETHER_POSTAL_ADDRESS}}
@@ -45,7 +50,8 @@ steps:
       <p>I wanted to follow up in case my note arrived at a busy time. Aether supports commercial properties with recurring cleaning and on-demand facility services, with one point of contact and work tailored to each site.</p>
       <p>Is this something you oversee, or is there someone else at {{company}} I should contact?</p>
       <p>This is a commercial message from Aether Facility Services.</p>
-      <p>Jordan Whitehurst<br>Aether Facility Services<br>602-612-6393</p>
+      <p><img src="{{AETHER_SIGNATURE_LOGO_URL}}" alt="Aether Facility Services logo" width="160" style="display:block;max-width:160px;height:auto;"></p>
+      <p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858<br>2120 W Encanto Blvd, Phoenix, AZ 85009</p>
       <p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
     bodyText: |-
       Hi {{firstName}},
@@ -56,9 +62,11 @@ steps:
 
       This is a commercial message from Aether Facility Services.
 
-      Jordan Whitehurst
-      Aether Facility Services
-      602-612-6393
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+      2120 W Encanto Blvd, Phoenix, AZ 85009
 
       Unsubscribe: {{unsubscribeUrl}}
       {{AETHER_POSTAL_ADDRESS}}
@@ -75,7 +83,8 @@ steps:
       <p>One reason organizations use Aether is to reduce the handoffs between janitorial, porter, floor, window, pressure-washing, and maintenance vendors. We build the service plan around the property rather than forcing a fixed package.</p>
       <p>Would it help if I sent a short capabilities overview for {{company}}?</p>
       <p>This is a commercial message from Aether Facility Services.</p>
-      <p>Jordan Whitehurst<br>Aether Facility Services<br>602-612-6393</p>
+      <p><img src="{{AETHER_SIGNATURE_LOGO_URL}}" alt="Aether Facility Services logo" width="160" style="display:block;max-width:160px;height:auto;"></p>
+      <p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858<br>2120 W Encanto Blvd, Phoenix, AZ 85009</p>
       <p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
     bodyText: |-
       Hi {{firstName}},
@@ -86,9 +95,11 @@ steps:
 
       This is a commercial message from Aether Facility Services.
 
-      Jordan Whitehurst
-      Aether Facility Services
-      602-612-6393
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+      2120 W Encanto Blvd, Phoenix, AZ 85009
 
       Unsubscribe: {{unsubscribeUrl}}
       {{AETHER_POSTAL_ADDRESS}}
@@ -105,7 +116,8 @@ steps:
       <p>I have not heard back, so I will close the loop after this note. If cleaning or facility support becomes a priority for {{company}}, I would be glad to compare needs and options.</p>
       <p>If someone else is the right contact, a quick redirect would be appreciated.</p>
       <p>This is a commercial message from Aether Facility Services.</p>
-      <p>Jordan Whitehurst<br>Aether Facility Services<br>602-612-6393</p>
+      <p><img src="{{AETHER_SIGNATURE_LOGO_URL}}" alt="Aether Facility Services logo" width="160" style="display:block;max-width:160px;height:auto;"></p>
+      <p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858<br>2120 W Encanto Blvd, Phoenix, AZ 85009</p>
       <p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
     bodyText: |-
       Hi {{firstName}},
@@ -116,9 +128,11 @@ steps:
 
       This is a commercial message from Aether Facility Services.
 
-      Jordan Whitehurst
-      Aether Facility Services
-      602-612-6393
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+      2120 W Encanto Blvd, Phoenix, AZ 85009
 
       Unsubscribe: {{unsubscribeUrl}}
       {{AETHER_POSTAL_ADDRESS}}

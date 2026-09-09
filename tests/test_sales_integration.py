@@ -354,6 +354,17 @@ def test_webhooks_are_authenticated_and_deduplicated():
     assert client.post("/webhooks/pipedrive", json={}).status_code == 401
 
 
+def test_signature_logo_asset_is_publicly_served():
+    settings = Settings(unsubscribe_secret="unsubscribe-secret")
+    db = MemoryDatabase()
+    app = create_app(settings, db=db, workflows=SalesWorkflows(settings, db))
+    response = TestClient(app).get("/assets/aether-signature-logo.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_warmy_header_event_type_is_preserved_for_header_only_envelope():
     settings = Settings(
         warmy_webhook_secret="warmy-secret",

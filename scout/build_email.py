@@ -29,6 +29,12 @@ def build(day, results_dir=None):
     leads.sort(key=lambda r: -int(r.get("score") or 0))
     priority = [r for r in leads if int(r.get("score") or 0) >= PRIORITY_SCORE]
     nurture = [r for r in leads if int(r.get("score") or 0) < PRIORITY_SCORE]
+    contact_count = sum(
+        1
+        for people in contacts.values()
+        for person in people
+        if person.get("email") or person.get("phone") or person.get("linkedin")
+    )
 
     sections = email_html.section(
         "Priority outreach",
@@ -50,7 +56,14 @@ def build(day, results_dir=None):
     out_path = os.path.join(day_dir, "leads_email.html")
     tmp_path = out_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(email_html.page(sections))
+        f.write(
+            email_html.page(
+                sections,
+                priority_count=len(priority),
+                nurture_count=len(nurture),
+                contact_count=contact_count,
+            )
+        )
     os.replace(tmp_path, out_path)
     print(f"wrote {out_path}: {len(priority)} priority + {len(nurture)} nurture")
     return out_path
@@ -71,6 +84,9 @@ def _self_check():
     table = email_html.table([sample], {})
     assert table.count("<th ") == 3
     assert "Business &amp; property signal" in table
+    page = email_html.page(table, priority_count=1, nurture_count=0, contact_count=2)
+    assert "Sales handoff" in page
+    assert "Pipedrive and WarmySender" in page
     print("build_email self-check passed")
 
 
