@@ -15,7 +15,7 @@ on:
         description: "Spend Apollo credits."
         required: false
         type: boolean
-        default: true
+        default: false
   schedule:
     - cron: "0 13 * * *"
 
@@ -63,13 +63,17 @@ jobs:
         run: |
           test -n "$CLIPROXY_BASE_URL" || { echo "Missing secret CLIPROXY_BASE_URL"; exit 1; }
           test -n "$CLIPROXY_API_KEY" || { echo "Missing secret CLIPROXY_API_KEY"; exit 1; }
-          test -n "$APOLLO_API_KEY" || { echo "Missing secret APOLLO_API_KEY"; exit 1; }
 
       - name: Run AEC scout pipeline
         run: |
           APOLLO_ARGS=""
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "$APOLLO_GO_INPUT" = "true" ]; then
+          if [ "$APOLLO_GO_INPUT" = "true" ]; then
+            test -n "$APOLLO_API_KEY" || { echo "Missing secret APOLLO_API_KEY for requested Apollo spend"; exit 1; }
             APOLLO_ARGS="--apollo-go"
+          elif [ "${{ github.event_name }}" = "schedule" ] && [ -n "$APOLLO_API_KEY" ]; then
+            APOLLO_ARGS="--apollo-go"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "APOLLO_API_KEY is not configured; running scheduled scout without Apollo fallback."
           fi
           uv run scout/pipeline.py \
             --workers "$WORKERS" \
