@@ -76,6 +76,12 @@ APIFY_FACEBOOK_ACTOR_ID=
 APIFY_TIMEOUT_SECONDS=300
 ```
 
+Use `http://localhost:8317/v1` only when the run is on a Mac or server with a
+local Cliproxy/CLIProxy-compatible service listening on that port. GitHub-hosted
+Actions cannot reach that loopback service. For the GitHub nightly workflow with
+a Grok API key, set `CLIPROXY_BASE_URL` to `https://api.x.ai/v1` and store the
+Grok API key in `CLIPROXY_API_KEY`.
+
 Do not commit `.env` or any real API key.
 
 ## GitHub Secrets
@@ -84,9 +90,9 @@ The production GitHub workflow reads these secrets:
 
 | Secret | Required | Used for |
 |---|---:|---|
-| `CLIPROXY_BASE_URL` | Yes | Responses API endpoint. |
+| `CLIPROXY_BASE_URL` | Yes | Responses API endpoint. Use `https://api.x.ai/v1` for GitHub-hosted Actions with a Grok key. |
 | `CLIPROXY_API_KEY` | Yes | Responses API auth. |
-| `APOLLO_API_KEY` | Yes | Apollo fallback when `--apollo-go` is enabled. |
+| `APOLLO_API_KEY` | No | Apollo fallback when `--apollo-go` is enabled. |
 | `APOLLO_WEBHOOK_URL` | No | Apollo phone reveal webhook if phone reveal is added. |
 
 Optional repository variables:
@@ -96,7 +102,7 @@ Optional repository variables:
 | `GROK_MODEL` | `grok-4.3` |
 | `EXTRACTOR_MODEL` | `grok-4.3` |
 
-Add the Apollo key in GitHub at:
+Add the Apollo key in GitHub only if Apollo fallback should spend credits:
 
 `Settings -> Secrets and variables -> Actions -> New repository secret -> APOLLO_API_KEY`
 
