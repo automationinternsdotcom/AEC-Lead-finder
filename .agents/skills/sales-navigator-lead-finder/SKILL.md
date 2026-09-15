@@ -1,6 +1,6 @@
 ---
 name: sales-navigator-lead-finder
-description: Find, research, qualify, and prioritize B2B leads for Automation Interns in LinkedIn Sales Navigator. Use for prospect searches, saved-search review, lead-list building, account mapping, and outreach-ready shortlists; use linkedin-manager for sending or managing conversations.
+description: Find, research, qualify, and prioritize B2B leads for Automation Interns or Aether Facility Services in LinkedIn Sales Navigator. Use for prospect searches, saved-search review, lead-list building, account mapping, and outreach-ready shortlists; use linkedin-manager for sending or managing conversations.
 ---
 
 # Sales Navigator Lead Finder

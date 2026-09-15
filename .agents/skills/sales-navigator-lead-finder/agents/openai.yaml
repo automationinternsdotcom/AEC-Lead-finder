@@ -1,4 +1,4 @@
 interface:
   display_name: "Sales Navigator Lead Finder"
   short_description: "Find and rank outreach-ready B2B prospects"
-  default_prompt: "Use $sales-navigator-lead-finder to build a verified shortlist of strong Automation Interns prospects."
+  default_prompt: "Use $sales-navigator-lead-finder to build a verified shortlist for the requested B2B prospecting campaign."
