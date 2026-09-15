@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from v2.ids import canonicalize_url, normalize_text
+from copy_grammar import review_copy
 
 
 WHY_LINE_PROTOCOL_VERSION = "recipient-outreach-v4"
@@ -195,7 +196,7 @@ def parse_why_line_selection(
         ):
             errors.append("why_line_slot_url")
         if template["sendable"] and not errors:
-            text = str(template["text"]).format(**slots)
+            text = review_copy(str(template["text"]).format(**slots))
             if not 20 <= _word_count(text) <= 55:
                 errors.append("why_line_word_count")
             if "—" in text or "–" in text:
@@ -206,8 +207,6 @@ def parse_why_line_selection(
             if not text.startswith(prefix):
                 errors.append("why_line_opener")
             company_references = [slots["company"]] if slots.get("company") else []
-            if not _uses_sentence_case_only(text, company_references):
-                errors.append("why_line_case")
             if not errors:
                 status = "valid"
         elif not template["sendable"] and not errors:
@@ -285,7 +284,7 @@ def _sentence_count(value: str) -> int:
     return len(re.findall(r"[.!?](?=\s+[A-Z]|$)", normalized))
 
 
-def _clean_slot(value: object, *, lowercase: bool = True) -> str:
+def _clean_slot(value: object, *, lowercase: bool = False) -> str:
     clean = " ".join(str(value or "").split()).strip(" ,.;:!?")
     return clean.lower() if lowercase else clean
 
@@ -297,16 +296,16 @@ def _locality_reference(value: object) -> str:
     clean = clean.split(",", 1)[0].strip()
     clean = re.split(r"\s+(?:and|/)\s+", clean, maxsplit=1)[0].strip()
     clean = re.split(r"\s+near\s+", clean, maxsplit=1)[0].strip()
-    clean = re.sub(r"\s+(?:az|arizona)$", "", clean).strip()
-    clean = re.sub(r"\s+(?:area|region|outskirts)$", "", clean).strip()
-    clean = {"phoenix deer valley": "deer valley"}.get(clean, clean)
+    clean = re.sub(r"\s+(?:az|arizona)$", "", clean, flags=re.I).strip()
+    clean = re.sub(r"\s+(?:area|region|outskirts)$", "", clean, flags=re.I).strip()
+    clean = {"phoenix deer valley": "Deer Valley"}.get(clean.casefold(), clean)
     broad = {
         "arizona", "arizona cities", "east valley", "maricopa county",
         "metro phoenix", "phoenix metro", "pinal county", "west valley",
     }
     if (
         not clean
-        or clean in broad
+        or clean.casefold() in broad
         or clean.endswith(" county")
         or clean.endswith(" cities")
         or "," in clean

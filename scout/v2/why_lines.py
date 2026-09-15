@@ -11,6 +11,7 @@ from .artifacts import ArtifactStore
 from .contracts import LeadEvent, Organization, ReviewItem
 from .ids import normalize_text, stable_uuid
 from .state import StateStore
+from copy_grammar import review_copy
 
 
 ModelCall = Callable[[str, str, list[dict]], tuple[str, dict]]
@@ -97,6 +98,7 @@ Rules:
 - For a sale or acquisition, use acquisition only when the named organization is the buyer/new owner.
 - Keep each slot concise, natural, and free of URLs. A location is one city or neighborhood without state text.
 - Return insertion slots only. Do not rewrite the approved template.
+- Proofread the assembled sentence for grammar only before returning slots. Include necessary articles in singular noun phrases (e.g. new_use: "a 255-room hotel", not "255-room hotel"). Preserve proper-name capitalization, numbers, event meaning, and the approved call to action. Do not reject a lead for a correctable grammar issue.
 
 Events:
 {events}
@@ -293,7 +295,7 @@ def parse_why_lines(
             values["company"] = _resolve_company(values["company"], organization)
             if not values["company"]:
                 raise WhyLineContractError(f"why-line company is invalid for {event_id}")
-        line = str(template["text"]).format(**values)
+        line = review_copy(str(template["text"]).format(**values))
         if (
             not line.startswith(
                 "Hi [first name], I wanted to reach out after seeing on the news that "

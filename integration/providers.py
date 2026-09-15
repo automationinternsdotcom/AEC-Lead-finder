@@ -17,6 +17,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .config import Settings
+from scout.copy_grammar import review_copy
 
 
 class ProviderError(RuntimeError):
@@ -138,7 +139,7 @@ class WarmyClient:
             ),
             "sourceArticle": contact.get("article_url", ""),
             "unsubscribeUrl": contact.get("unsubscribe_url", ""),
-            "whyLine": contact.get("why_line", ""),
+            "whyLine": review_copy(contact.get("why_line", "")),
             "projectPropertyName": contact.get("project_property_name", ""),
         }
         return {key: value for key, value in values.items() if value not in ("", None)}
