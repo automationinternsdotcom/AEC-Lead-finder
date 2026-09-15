@@ -31,6 +31,8 @@ from v2.discovery import (  # noqa: E402
 from v2.http import FetchResponse  # noqa: E402
 from v2.providers import (  # noqa: E402
     ApifyFacebookAdapter,
+    CostarTenantAdapter,
+    MapsDataAdapter,
     NewsApiAdapter,
     ProviderPreflightError,
 )
@@ -608,6 +610,62 @@ def test_provider_preflight_and_bounded_results():
         run_actor=lambda token, actor, payload, timeout: rows,
     )
     assert len(apify.discover(date(2026, 8, 27), date(2026, 8, 28))) == 20
+
+
+def test_mapsdata_csv_and_completed_job_imports_provider_records(tmp_path):
+    export = tmp_path / "mapsdata.csv"
+    export.write_text(
+        "Business,Category,Address,City,State,Website,Email,Phone\n"
+        "Acme Warehouse,Warehouse,10 Industrial Way,Phoenix,Arizona,acme.example,ops@acme.example,555-0100\n",
+        encoding="utf-8",
+    )
+    csv_records = MapsDataAdapter(csv_paths=[str(export)]).discover(
+        date(2026, 8, 27), date(2026, 8, 28)
+    )
+    assert len(csv_records) == 1
+    assert csv_records[0].provider == "mapsdata"
+    assert csv_records[0].url == "https://acme.example"
+    assert "Phoenix" in csv_records[0].title
+
+    def get_json(url, api_key, timeout):
+        if url.endswith("/jobs/job-1"):
+            return {"id": "job-1", "status": "completed"}
+        return {"url": "https://download.example/mapsdata.csv"}
+
+    job_records = MapsDataAdapter(
+        api_key="mdk_live_test",
+        job_ids=["job-1"],
+        get_json=get_json,
+        get_text=lambda url, timeout: export.read_text(encoding="utf-8"),
+    ).discover(date(2026, 8, 27), date(2026, 8, 28))
+    assert len(job_records) == 1
+    assert job_records[0].raw["job_id"] == "job-1"
+
+
+def test_mapsdata_rejects_unfinished_job():
+    adapter = MapsDataAdapter(
+        api_key="mdk_live_test",
+        job_ids=["job-1"],
+        get_json=lambda url, api_key, timeout: {"id": "job-1", "status": "running"},
+    )
+    with pytest.raises(ProviderPreflightError, match="not completed"):
+        adapter.discover(date(2026, 8, 27), date(2026, 8, 28))
+
+
+def test_costar_tenant_csv_imports_operator_context(tmp_path):
+    export = tmp_path / "costar-tenants.csv"
+    export.write_text(
+        "Tenant Name,Property Name,Address,City,State,Lease Date,Property URL\n"
+        "Acme Logistics,Desert Industrial Center,10 Industrial Way,Phoenix,Arizona,2026-08-28,https://costar.example/property/1\n",
+        encoding="utf-8",
+    )
+    records = CostarTenantAdapter(csv_paths=[str(export)]).discover(
+        date(2026, 8, 27), date(2026, 8, 28)
+    )
+    assert len(records) == 1
+    assert records[0].provider == "costar_tenant"
+    assert records[0].published_at == "2026-08-28"
+    assert "Acme Logistics" in records[0].title
 
 
 def test_fuzzy_dedup_requires_exact_coverage():

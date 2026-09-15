@@ -58,10 +58,11 @@ Organization: {name}
 Known aliases: {aliases}
 Known domain: {domain}
 Location: {location}
+Known lead events and tenant/source context: {lead_events}
 Date: {today}
 
-Prefer official company/property pages, management pages, press releases, LinkedIn profiles, public filings, chambers, and credible local sources. Prioritize owner, COO, property/community manager, asset manager, facilities manager, and operations authority. Prefer a sourced direct email; retain a sourced company mailbox when no named contact is reachable, without attributing that mailbox to a person. Article authors, brokers, architects, GCs, PR contacts, and sellers are not automatically the operator: verify their relationship and retain useful referral or closeout routes.
-Use one research path. First verify the exact current organization and its official domain; guard against namesakes, project names, landlords, brokers, affiliates, and former employers. Prefer local or regional authority over facilities, property/asset management, development, leasing, ownership, or operations. HR, recruiting, privacy, safety, and unrelated-region roles are lower-fit signals, not automatic exclusions: retain a sourced reachable person when no stronger contact is found. For each verified person, also return any public professional LinkedIn, email, and phone details found during the same research. Never guess. Each person's sources must support the current role and any returned contact fields. Return strict JSON:
+Prefer official company/property pages, management pages, press releases, LinkedIn profiles, LinkedIn Sales Navigator findings when available to the operator, public filings, chambers, and credible local sources. Prioritize owner, COO, property/community manager, asset manager, facilities manager, and operations authority. Prefer a sourced direct email; retain a sourced company mailbox when no named contact is reachable, without attributing that mailbox to a person. Article authors, brokers, architects, GCs, PR contacts, and sellers are not automatically the operator: verify their relationship and retain useful referral or closeout routes.
+Use one research path. First verify the exact current organization and its official domain; guard against namesakes, project names, landlords, brokers, affiliates, tenants with similarly named parent companies, and former employers. Treat Costar tenant data and MapsData rows as source context to verify, not as final authority by themselves. Prefer local or regional authority over facilities, property/asset management, development, leasing, ownership, tenancy, or operations. HR, recruiting, privacy, safety, and unrelated-region roles are lower-fit signals, not automatic exclusions: retain a sourced reachable person when no stronger contact is found. For each verified person, also return any public professional LinkedIn, email, and phone details found during the same research. Never guess. Each person's sources must support the current role and any returned contact fields. Return strict JSON:
 {{"canonical_domain":"","aliases":[],"decision_makers":[{{"name":"","title":"","scope":"","linkedin":"","email":"","phone":"","sources":[{{"url":"","supports":""}}]}}],"employee_count":{{"value":"","scope":"company|location","as_of":"","confidence":"high|medium|low"}},"sources":[{{"url":"","supports":""}}]}}
 Use an empty decision_makers list and null employee_count when nothing is verified."""
 
@@ -143,6 +144,18 @@ class DecisionMakerService:
             aliases=json.dumps(organization.aliases),
             domain=organization.domain,
             location=organization.location,
+            lead_events=json.dumps(
+                [
+                    {
+                        "event": event.event,
+                        "location": event.location,
+                        "date_posted": str(event.date_posted or ""),
+                        "source_urls": [item.url for item in event.evidence],
+                    }
+                    for event in self.events_by_org.get(organization.organization_id, [])
+                ],
+                sort_keys=True,
+            ),
             today=date.today().isoformat(),
         )
         request = self.artifacts.write_raw(

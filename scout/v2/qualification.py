@@ -41,12 +41,12 @@ Choose business_name as the sourced operator, tenant, owner, property manager, d
 service_angle must name a concrete Aether fit such as recurring janitorial, common-area cleaning, day porter, evening/overnight cleaning, turnover/lease-up support, pressure washing, floor care, or maintenance coordination."""
 
 
-QUALIFICATION_PROMPT = """Open and read the exact article URL below using web search. Determine whether it reports a specific Arizona commercial-property event that could create a facilities-services opportunity. Never infer rejection from missing data.
+QUALIFICATION_PROMPT = """Open and read the exact source URL below using web search when it is a public URL, and use the saved source evidence when the URL represents an imported provider row. Determine whether it reports a specific Arizona commercial-property event that could create a facilities-services opportunity. Never infer rejection from missing data.
 
 Candidate ID: {candidate_id}
 URL: {url}
 Title: {title}
-Requested article window: {window_start} through {window_end}, inclusive.
+Requested source window: {window_start} through {window_end}, inclusive.
 
 Guidance:
 {lead_guidance}
@@ -56,17 +56,17 @@ qualified, business_name, person, event, date_posted, location, summary, state,
 priority, property_type, service_angle, filter_reason, confidence, identity_uncertain.
 Set identity_uncertain=true when missing property/operator identity is the only obstacle; this is recoverable review, never a definitive rejection.
 
-For an explicit non-qualifying article or an article published outside the requested window, return qualified=false and a nonempty filter_reason. For a qualifying article, date_posted must be the exact article publication date and fall inside the requested window; state must be Arizona, priority must be high or medium, confidence must be high or low, and business_name, event, and location must be nonempty. Use empty strings for unknown optional values. Return no prose."""
+For an explicit non-qualifying source record or a source event outside the requested window, return qualified=false and a nonempty filter_reason. For a qualifying source, date_posted must be the exact source publication/event/scrape date and fall inside the requested window; state must be Arizona, priority must be high or medium, confidence must be high or low, and business_name, event, and location must be nonempty. Use empty strings for unknown optional values. Return no prose."""
 
 
-BATCH_QUALIFICATION_PROMPT = """Qualify this bounded batch using only the supplied saved article evidence. Do not search the web and do not identify people. For every exact candidate_id, decide whether the article reports a specific Arizona commercial-property event that creates a facilities-services opportunity.
+BATCH_QUALIFICATION_PROMPT = """Qualify this bounded batch using only the supplied saved source evidence. Do not search the web and do not identify people. For every exact candidate_id, decide whether the article, provider row, or tenant record reports a specific Arizona commercial-property event that creates a facilities-services opportunity.
 
-Requested article window: {window_start} through {window_end}, inclusive.
+Requested source window: {window_start} through {window_end}, inclusive.
 
 Guidance:
 {lead_guidance}
 
-Return strict JSON only as one object mapping every exact candidate_id to an object with keys: qualified, business_name, event, date_posted, location, summary, state, priority, property_type, service_angle, filter_reason, confidence. date_posted must be YYYY-MM-DD or an empty string, never a timestamp. Include every submitted ID exactly once and invent no IDs. An explicit rejection or an article outside the requested window requires a specific filter_reason. A qualification requires a date inside the requested window, state Arizona, priority high or medium, confidence high or low, and nonempty business_name, event, and location.
+Return strict JSON only as one object mapping every exact candidate_id to an object with keys: qualified, business_name, event, date_posted, location, summary, state, priority, property_type, service_angle, filter_reason, confidence. date_posted must be YYYY-MM-DD or an empty string, never a timestamp. Include every submitted ID exactly once and invent no IDs. An explicit rejection or source event outside the requested window requires a specific filter_reason. A qualification requires a date inside the requested window, state Arizona, priority high or medium, confidence high or low, and nonempty business_name, event, and location.
 Also return identity_uncertain=true when missing property/operator identity is the only obstacle. Such results are recoverable review, not definitive rejection. When a project is named, retain that sourced name and qualify the property event without inventing an operator.
 
 Candidates:
@@ -467,7 +467,7 @@ class QualificationService:
         evidence = [
             Evidence(
                 url=support_candidates[item].canonical_url,
-                supports="Source article for the qualified property event.",
+                supports="Source record for the qualified property event.",
                 provider=support_candidates[item].provider,
             )
             for item in support_ids
@@ -475,7 +475,7 @@ class QualificationService:
         ] or [
             Evidence(
                 url=candidate.canonical_url,
-                supports="Source article for the qualified property event.",
+                supports="Source record for the qualified property event.",
                 provider=candidate.provider,
             )
         ]

@@ -51,6 +51,8 @@ Comparison delivery remains a separate exactly-once Gmail command.
 - A Responses-compatible API endpoint with access to Grok and web search
 - `news_websites.csv`
 - Apollo.io API key if you want Apollo fallback enrichment
+- MapsData API key or CSV export if you want MapsData lead ingestion
+- Operator-reviewed Costar tenant CSV export if you want Costar tenant context
 
 ## Configuration
 
@@ -74,6 +76,10 @@ NEWSAPI_AI_TIMEOUT_SECONDS=60
 APIFY_TOKEN=
 APIFY_FACEBOOK_ACTOR_ID=
 APIFY_TIMEOUT_SECONDS=300
+MAPSDATA_KEY=
+MAPSDATA_CSV=
+MAPSDATA_JOB_ID=
+COSTAR_TENANT_CSV=
 ```
 
 Use `http://localhost:8317/v1` only when the run is on a Mac or server with a
@@ -146,6 +152,27 @@ fails preflight:
 ```bash
 uv run scout/pipeline.py --newsapi
 uv run scout/pipeline.py --apify
+```
+
+MapsData and Costar tenant ingestion are also opt-in. MapsData can read a local CSV
+export (`MAPSDATA_CSV=/path/to/export.csv`) or download a completed job
+(`MAPSDATA_JOB_ID=<job-id>` plus `MAPSDATA_KEY`). The pipeline intentionally does
+not submit new MapsData scrapes; create and complete those in MapsData first, then
+ingest the finished file/job so the daily run does not wait for an asynchronous job
+or accidentally spend quota. MapsData API behavior follows their documented
+completed-job/download flow.
+
+Costar ingestion reads operator-reviewed tenant exports from `COSTAR_TENANT_CSV`.
+Use fields such as tenant/business name, property name, address, city, state, lease
+or occupancy date, and property/listing URL when available. Both providers preserve
+the raw row in run artifacts, then qualify it through the same source-backed AEC
+judgment, decision-maker research, LinkedIn/Sales Nav context, contact verification,
+scoring, and sales handoff path:
+
+```bash
+MAPSDATA_CSV=/secure/exports/mapsdata-phoenix.csv uv run scout/pipeline.py --mapsdata
+COSTAR_TENANT_CSV=/secure/exports/costar-tenants.csv uv run scout/pipeline.py --costar
+uv run scout/pipeline.py --mapsdata --costar
 ```
 
 Apollo credits are only spent when `--apollo-go` is present.
@@ -352,7 +379,7 @@ health-check, and backup instructions.
 
 | Stage | Service outcome |
 |---|---|
-| discover | Curated URLs, learned/validated RSS, and optional manual providers |
+| discover | Curated URLs, learned/validated RSS, and optional manual providers including MapsData and Costar tenant exports |
 | qualify | Typed Arizona AEC judgments; invalid/incomplete records go to review |
 | dedup | Canonical URL, event fingerprint, and coverage-checked fuzzy grouping |
 | decision-makers | Organization-grouped research with stable person identities |

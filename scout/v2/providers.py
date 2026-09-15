@@ -1,12 +1,16 @@
-"""Manual-only NewsAPI and Apify discovery adapters."""
+"""Manual-only discovery adapters for paid and external lead sources."""
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import json
 import os
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Callable, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -16,6 +20,7 @@ NEWSAPI_HARD_MAX_PAGES = 100
 NEWSAPI_PAGE_SIZE = 100
 PROVIDER_WORKERS = 4
 APIFY_RESULTS_PER_QUERY = 20
+MAPSDATA_BASE_URL = "https://mapsdata.ai/api/v1"
 AEC_QUERY_GROUPS = {
     "openings": "Arizona grand opening commercial property",
     "leases": "Arizona commercial lease tenant signed",
@@ -178,6 +183,114 @@ class ApifyFacebookAdapter:
         return list(records.values())
 
 
+class MapsDataAdapter:
+    """Import completed MapsData jobs or exported CSV files as discovery records.
+
+    The pipeline deliberately does not submit new MapsData scrapes. MapsData jobs
+    are asynchronous and bill against workspace allowance, so creation belongs in
+    an operator-controlled step. This adapter only reads an existing completed job
+    or a local export.
+    """
+
+    name = "mapsdata"
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        csv_paths: list[str] | None = None,
+        job_ids: list[str] | None = None,
+        base_url: str | None = None,
+        timeout: int | None = None,
+        get_json: Callable[[str, str, int], dict] | None = None,
+        get_text: Callable[[str, int], str] | None = None,
+    ):
+        self.api_key = api_key if api_key is not None else os.environ.get("MAPSDATA_KEY", "")
+        self.csv_paths = csv_paths if csv_paths is not None else _env_list("MAPSDATA_CSV")
+        configured_jobs = [*(_env_list("MAPSDATA_JOB_IDS")), *(_env_list("MAPSDATA_JOB_ID"))]
+        self.job_ids = job_ids if job_ids is not None else configured_jobs
+        self.base_url = (base_url or os.environ.get("MAPSDATA_BASE_URL") or MAPSDATA_BASE_URL).rstrip("/")
+        self.timeout = int(timeout or os.environ.get("MAPSDATA_TIMEOUT_SECONDS", "120"))
+        self.get_json = get_json or self._get_json
+        self.get_text = get_text or _get_text
+
+    def preflight(self) -> None:
+        if not self.csv_paths and not self.job_ids:
+            raise ProviderPreflightError("MAPSDATA_CSV or MAPSDATA_JOB_ID is required")
+        if self.job_ids and not self.api_key.strip():
+            raise ProviderPreflightError("MAPSDATA_KEY is required for MAPSDATA_JOB_ID")
+        for path in self.csv_paths:
+            if not Path(path).is_file():
+                raise ProviderPreflightError(f"MapsData CSV not found: {path}")
+
+    def discover(self, start: date, end: date) -> list[ProviderRecord]:
+        self.preflight()
+        records: dict[str, ProviderRecord] = {}
+        for path in self.csv_paths:
+            text = Path(path).read_text(encoding="utf-8-sig")
+            for record in _records_from_rows(
+                "mapsdata",
+                _read_csv_rows(text),
+                default_date=end.isoformat(),
+                raw_context={"csv_path": path},
+            ):
+                records.setdefault(record.provider_id, record)
+        for job_id in self.job_ids:
+            job = self.get_json(f"{self.base_url}/jobs/{quote(job_id)}", self.api_key, self.timeout)
+            status = str(job.get("status") or "").casefold()
+            if status != "completed":
+                raise ProviderPreflightError(f"MapsData job is not completed: {job_id} ({status or 'unknown'})")
+            link = self.get_json(
+                f"{self.base_url}/jobs/{quote(job_id)}/download?format=csv&scope=all",
+                self.api_key,
+                self.timeout,
+            )
+            text = self.get_text(str(link.get("url") or ""), self.timeout)
+            for record in _records_from_rows(
+                "mapsdata",
+                _read_csv_rows(text),
+                default_date=end.isoformat(),
+                raw_context={"job_id": job_id, "job": job, "download": link},
+            ):
+                records.setdefault(record.provider_id, record)
+        return list(records.values())
+
+    def _get_json(self, url: str, api_key: str, timeout: int) -> dict:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+            response.raise_for_status()
+            return response.json()
+
+
+class CostarTenantAdapter:
+    """Import operator-reviewed Costar tenant exports as discovery records."""
+
+    name = "costar_tenant"
+
+    def __init__(self, csv_paths: list[str] | None = None):
+        self.csv_paths = csv_paths if csv_paths is not None else _env_list("COSTAR_TENANT_CSV")
+
+    def preflight(self) -> None:
+        if not self.csv_paths:
+            raise ProviderPreflightError("COSTAR_TENANT_CSV is required")
+        for path in self.csv_paths:
+            if not Path(path).is_file():
+                raise ProviderPreflightError(f"Costar tenant CSV not found: {path}")
+
+    def discover(self, start: date, end: date) -> list[ProviderRecord]:
+        self.preflight()
+        records: dict[str, ProviderRecord] = {}
+        for path in self.csv_paths:
+            text = Path(path).read_text(encoding="utf-8-sig")
+            for record in _records_from_rows(
+                self.name,
+                _read_csv_rows(text),
+                default_date=end.isoformat(),
+                raw_context={"csv_path": path},
+            ):
+                records.setdefault(record.provider_id, record)
+        return list(records.values())
+
+
 def _post_json(url: str, payload: dict, timeout: int) -> dict:
     with httpx.Client(timeout=timeout) as client:
         response = client.post(url, json=payload)
@@ -207,3 +320,145 @@ def _run_apify_actor(token: str, actor_id: str, payload: dict, timeout: int) -> 
         dataset.raise_for_status()
         value = dataset.json()
         return value if isinstance(value, list) else []
+
+
+def _env_list(name: str) -> list[str]:
+    return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
+
+
+def _read_csv_rows(text: str) -> list[dict]:
+    return [dict(row) for row in csv.DictReader(io.StringIO(text))]
+
+
+def _records_from_rows(
+    provider: str,
+    rows: list[dict],
+    *,
+    default_date: str,
+    raw_context: dict,
+) -> list[ProviderRecord]:
+    records: list[ProviderRecord] = []
+    for row in rows:
+        normalized = {_normalize_key(key): value for key, value in row.items()}
+        url = _row_url(normalized, provider)
+        title = _row_title(normalized, provider)
+        if not title:
+            continue
+        row_hash = _row_hash(provider, normalized)
+        provider_id = _first(
+            normalized,
+            "id",
+            "lead_id",
+            "place_id",
+            "google_place_id",
+            "cid",
+            "property_id",
+            "tenant_id",
+            "listing_id",
+        ) or row_hash
+        source_name = _first(normalized, "source", "source_name", "list_name") or provider
+        records.append(
+            ProviderRecord(
+                provider=provider,
+                provider_id=str(provider_id),
+                url=url,
+                title=title,
+                published_at=_first(
+                    normalized,
+                    "date",
+                    "published_at",
+                    "updated_at",
+                    "scraped_at",
+                    "lease_date",
+                    "move_in_date",
+                    "opening_date",
+                    "occupancy_date",
+                ) or default_date,
+                source_name=str(source_name),
+                raw={
+                    **raw_context,
+                    "row": row,
+                    "normalized_row": normalized,
+                    "provider_record_hash": row_hash,
+                },
+            )
+        )
+    return records
+
+
+def _row_url(row: dict, provider: str) -> str:
+    value = _first(
+        row,
+        "source_url",
+        "article_url",
+        "property_url",
+        "listing_url",
+        "website",
+        "business_website",
+        "company_website",
+        "url",
+        "google_maps_url",
+        "maps_url",
+    )
+    normalized = _normalize_url(value)
+    if normalized:
+        return normalized
+    return f"https://{provider.replace('_', '-')}.aether.local/lead/{_row_hash(provider, row)}"
+
+
+def _row_title(row: dict, provider: str) -> str:
+    if provider == "costar_tenant":
+        pieces = [
+            _first(row, "tenant", "tenant_name", "business_name", "company"),
+            _first(row, "property", "property_name", "building_name"),
+            _first(row, "address", "street_address"),
+            _first(row, "city"),
+            _first(row, "state"),
+            _first(row, "event", "lease_status", "occupancy_status"),
+        ]
+    else:
+        pieces = [
+            _first(row, "business", "business_name", "name", "company"),
+            _first(row, "category", "type"),
+            _first(row, "address", "street_address"),
+            _first(row, "city"),
+            _first(row, "state", "region"),
+            _first(row, "email", "phone", "website"),
+        ]
+    return " | ".join(str(piece).strip() for piece in pieces if str(piece or "").strip())[:500]
+
+
+def _first(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _normalize_key(key: str | None) -> str:
+    return "".join(character if character.isalnum() else "_" for character in str(key or "").strip().casefold()).strip("_")
+
+
+def _normalize_url(value: str) -> str:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return ""
+    parsed = urlsplit(cleaned if "://" in cleaned else f"https://{cleaned}")
+    if not parsed.netloc or "." not in parsed.netloc:
+        return ""
+    return parsed.geturl()
+
+
+def _row_hash(provider: str, row: dict) -> str:
+    payload = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(f"{provider}:{payload}".encode()).hexdigest()[:24]
+
+
+def _get_text(url: str, timeout: int) -> str:
+    if not url:
+        raise ProviderPreflightError("download URL is missing")
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        return response.text
