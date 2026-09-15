@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config import ActivationBlocked, Settings
+from scout.copy_grammar import review_copy
 
 COPY_PLACEHOLDER = "TODO_APPROVED_COPY"
 SIGNATURE_LOGO_PLACEHOLDER = "{{AETHER_SIGNATURE_LOGO_URL}}"
@@ -32,6 +33,11 @@ class CampaignStep(BaseModel):
     delayDays: int = Field(ge=0)
     delayHours: int = Field(default=0, ge=0, le=23)
     isActive: bool = True
+
+    @field_validator("subject", "bodyText", "bodyHtml")
+    @classmethod
+    def review_grammar(cls, value: str) -> str:
+        return review_copy(value)
 
     @model_validator(mode="after")
     def validate_inherited_subject(self):

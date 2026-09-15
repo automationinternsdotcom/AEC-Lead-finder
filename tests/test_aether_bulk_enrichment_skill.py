@@ -851,7 +851,7 @@ def test_why_line_selection_renders_approved_template_and_fails_closed():
     assert valid.status == "valid"
     assert valid.text == (
         "Hi [first name], I wanted to reach out after seeing on the news that "
-        "the new phoenix marketplace is opening in phoenix. "
+        "the new Phoenix marketplace is opening in Phoenix. "
         "Is there any chance we could stay in touch regarding your future janitorial needs?"
     )
     assert unsupported.status == "review" and unsupported.text == ""
@@ -861,12 +861,12 @@ def test_why_line_selection_renders_approved_template_and_fails_closed():
 @pytest.mark.parametrize(
     ("raw_location", "expected"),
     [
-        ("Tempe, Arizona", "tempe"),
-        ("Deer Valley, North Phoenix", "deer valley"),
-        ("Tucson and Gilbert", "tucson"),
-        ("Southeast Mesa near Ray and Sossaman Roads, AZ", "southeast mesa"),
-        ("Buckeye Arizona", "buckeye"),
-        ("Phoenix Deer Valley AZ", "deer valley"),
+        ("Tempe, Arizona", "Tempe"),
+        ("Deer Valley, North Phoenix", "Deer Valley"),
+        ("Tucson and Gilbert", "Tucson"),
+        ("Southeast Mesa near Ray and Sossaman Roads, AZ", "Southeast Mesa"),
+        ("Buckeye Arizona", "Buckeye"),
+        ("Phoenix Deer Valley AZ", "Deer Valley"),
     ],
 )
 def test_why_line_location_is_reduced_to_one_leaf_locality(raw_location, expected):
@@ -1039,12 +1039,7 @@ def test_every_approved_template_renders_brief_copy_or_an_intentional_skip():
             assert why_line.text.startswith(
                 "Hi [first name], I wanted to reach out after seeing"
             )
-            assert _uses_sentence_case_only(
-                why_line.text,
-                company_references=[why_line.slots["company"]]
-                if why_line.slots.get("company")
-                else [],
-            )
+            assert "why_line_case" not in why_line.validation_errors
             assert 20 <= len(why_line.text.split()) <= 55
             if why_line.slots.get("location"):
                 assert "," not in why_line.slots["location"]
@@ -2156,7 +2151,7 @@ def test_recipient_why_refresh_is_one_call_per_business_and_resumable(tmp_path):
     calls = []
     line = (
         "Hi [first name], I wanted to reach out after seeing on the news that "
-        "the new warehouse is opening in phoenix. "
+        "the new warehouse is opening in Phoenix. "
         "Is there any chance we could stay in touch regarding your future janitorial needs?"
     )
 
@@ -2532,7 +2527,7 @@ def test_bulk_runner_exports_leads_and_companies_without_delivery(tmp_path):
 
     why_line = (
         "Hi [first name], I wanted to reach out after seeing on the news that "
-        "the new commercial marketplace is opening in phoenix. "
+        "the new commercial marketplace is opening in Phoenix. "
         "Is there any chance we could stay in touch regarding your future janitorial needs?"
     )
 
