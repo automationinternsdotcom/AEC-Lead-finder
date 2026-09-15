@@ -23,6 +23,15 @@ they do not abort export or ingestion of contacts already found. Completed Grok
 no-email searches are cached within each run. After the provider/balance recovers,
 retry the original dates and run ID with `--retry-review` to recover the backlog.
 
+MapsData and Costar tenant data are available as explicit discovery add-ons. They
+are not enabled by default in the daily automation. To include them, place completed
+exports on the runtime machine, set `MAPSDATA_CSV` or `MAPSDATA_JOB_ID`/`MAPSDATA_KEY`
+and `COSTAR_TENANT_CSV` in the runtime `.env`, then append `--mapsdata` and/or
+`--costar` to the automation command. The pipeline reads completed MapsData jobs or
+CSV exports only; it does not start new MapsData scrapes during the nightly run.
+Costar rows must be operator-reviewed tenant exports, not browser-scraped session
+data. Imported rows are preserved under the run's raw artifacts before qualification.
+
 The reviewed existing draft fingerprint is pinned in
 `config/daily_campaign_fingerprint.json`; template/settings drift stops enrollment
 until the change is reviewed. This daily pin does not alter the production sending
@@ -39,6 +48,10 @@ Production scheduling points to a deployed code snapshot at
 Codex worktrees. Credentials and SQLite/results remain in
 `/Users/openclaw/Code/AEC-Lead-finder`. The existing Codex automation is updated in
 place; do not also install the legacy nightly LaunchAgent below.
+
+Keep the OpenClaw MacBook automation instructions in
+`handoff/oc-macbook-automation-instructions.md` current whenever the runtime command,
+environment, branch, or provider gates change.
 
 ## Legacy nightly wrapper
 

@@ -36,7 +36,14 @@ from .discovery import (
 from .exports import ExportService
 from .http import FetchResponse, HttpFetcher
 from .ids import candidate_id, canonicalize_url, stable_hash, stable_uuid
-from .providers import ApifyFacebookAdapter, NewsApiAdapter, ProviderAdapter, ProviderRecord
+from .providers import (
+    ApifyFacebookAdapter,
+    CostarTenantAdapter,
+    MapsDataAdapter,
+    NewsApiAdapter,
+    ProviderAdapter,
+    ProviderRecord,
+)
 from .qualification import QualificationService
 from .research import ContactResearchService, DecisionMakerService
 from .scoring import ScoringService
@@ -66,6 +73,8 @@ class PipelineOptions:
     phone_webhook: str = ""
     newsapi: bool = False
     apify: bool = False
+    mapsdata: bool = False
+    costar: bool = False
     treg_go: bool = False
     treg_budget_usd: float = 5.0
     grok_model: str = "grok-4.3"
@@ -105,6 +114,8 @@ class PipelineRunner:
         apollo_request: Callable[[str, dict], dict] | None = None,
         newsapi_adapter: ProviderAdapter | None = None,
         apify_adapter: ProviderAdapter | None = None,
+        mapsdata_adapter: ProviderAdapter | None = None,
+        costar_adapter: ProviderAdapter | None = None,
     ):
         if options.resume and not options.run_id:
             raise ValueError("--resume requires --run-id")
@@ -116,6 +127,8 @@ class PipelineRunner:
         self.apollo_request = apollo_request
         self.newsapi_adapter = newsapi_adapter
         self.apify_adapter = apify_adapter
+        self.mapsdata_adapter = mapsdata_adapter
+        self.costar_adapter = costar_adapter
         self.state = StateStore(options.db_path)
         self.state.migrate()
         self.artifacts = ArtifactStore(
@@ -135,6 +148,8 @@ class PipelineRunner:
             "apollo_phones": options.apollo_phones,
             "newsapi": options.newsapi,
             "apify": options.apify,
+            "mapsdata": options.mapsdata,
+            "costar": options.costar,
             "treg_go": options.treg_go,
             "treg_budget_usd": options.treg_budget_usd,
             "grok_model": options.grok_model,
@@ -324,6 +339,12 @@ class PipelineRunner:
             batches.append(self._discover_provider(adapter))
         if self.options.apify:
             adapter = self.apify_adapter or ApifyFacebookAdapter()
+            batches.append(self._discover_provider(adapter))
+        if self.options.mapsdata:
+            adapter = self.mapsdata_adapter or MapsDataAdapter()
+            batches.append(self._discover_provider(adapter))
+        if self.options.costar:
+            adapter = self.costar_adapter or CostarTenantAdapter()
             batches.append(self._discover_provider(adapter))
         all_candidates = [
             candidate for batch in batches for candidate in batch.candidates

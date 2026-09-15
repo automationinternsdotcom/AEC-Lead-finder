@@ -31,4 +31,5 @@ GPS uses Google News/provider expansion, while Aether AEC uses the curated
 
 Start commands from the repo root. Keep secrets in `.env`; do not commit them.
 Use `--apollo-go` only when the operator explicitly wants Apollo credits spent.
-NewsAPI and Apify are manual-only via `--newsapi` and `--apify`.
+NewsAPI, Apify, MapsData, and Costar are manual-only via `--newsapi`, `--apify`,
+`--mapsdata`, and `--costar`.

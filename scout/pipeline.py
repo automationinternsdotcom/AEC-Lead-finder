@@ -72,6 +72,18 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="manually enable the Apify/Facebook adapter",
     )
+    value.add_argument(
+        "--mapsdata",
+        action="store_true",
+        default=bool(config.MAPSDATA_CSV or config.MAPSDATA_JOB_ID or config.MAPSDATA_JOB_IDS),
+        help="manually enable MapsData ingestion from MAPSDATA_CSV or a completed MAPSDATA_JOB_ID",
+    )
+    value.add_argument(
+        "--costar",
+        action="store_true",
+        default=bool(config.COSTAR_TENANT_CSV),
+        help="manually enable Costar tenant-data ingestion from COSTAR_TENANT_CSV",
+    )
     return value
 
 
@@ -98,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         phone_webhook=os.environ.get("APOLLO_WEBHOOK_URL", ""),
         newsapi=args.newsapi,
         apify=args.apify,
+        mapsdata=args.mapsdata,
+        costar=args.costar,
         grok_model=config.GROK_MODEL,
         extractor_model=config.EXTRACTOR_MODEL,
     )
