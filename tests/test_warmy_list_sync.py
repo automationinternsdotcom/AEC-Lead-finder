@@ -162,6 +162,32 @@ def test_provider_prospect_membership_is_required_when_canonical_list_is_configu
     )["id"] == "prospect-1"
 
 
+def test_provider_prospect_membership_accepts_authoritative_detail_id_shape():
+    from integration.providers import validate_provider_prospect
+
+    response = {
+        "id": "prospect-1",
+        "email": CONTACT["email"],
+        "globalStatus": "active",
+        "suppressionReason": None,
+        "lastRepliedAt": None,
+        "listMemberships": [
+            {
+                "id": "list-article-leads",
+                "name": "Aether AEC Article Leads",
+                "color": "#6366f1",
+            }
+        ],
+    }
+    assert validate_provider_prospect(
+        response,
+        expected_id="prospect-1",
+        expected_email=CONTACT["email"],
+        initial_step=True,
+        expected_list_id="list-article-leads",
+    )["id"] == "prospect-1"
+
+
 def test_provider_prospect_membership_missing_or_wrong_is_held():
     from integration.providers import validate_provider_prospect
     for memberships in (None, [{"listId": "other-list"}]):

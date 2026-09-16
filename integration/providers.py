@@ -74,7 +74,12 @@ def validate_provider_prospect(
         memberships = prospect.get("listMemberships")
         if not isinstance(memberships, list) or not any(
             isinstance(item, dict)
-            and str(item.get("listId") or "").strip() == expected_list_id.strip()
+            and expected_list_id.strip() in {
+                str(item.get("listId") or "").strip(),
+                # Warmy prospect-detail responses identify memberships with
+                # ``id``; some list endpoints use the older ``listId`` key.
+                str(item.get("id") or "").strip(),
+            }
             for item in memberships
         ):
             raise ActivationBlocked("provider prospect is not a member of the canonical list")

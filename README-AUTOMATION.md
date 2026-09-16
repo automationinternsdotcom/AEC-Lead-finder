@@ -11,7 +11,10 @@ overlaps the checkpoint by two days to catch late articles.
 `integration.daily` validates the typed handoff, syncs Pipedrive events and people,
 creates/updates Warmy contacts with the sourced why-lines, then (when explicitly
 requested) appends them to the configured canonical Warmy prospect list. This
-list-only operation does not approve, enroll, or start a campaign. It
+list-only operation does not approve, directly enroll, or start a campaign. A
+provider campaign linked to this list may still natively autosync new members;
+that provider behavior is a separate campaign-enrollment risk and production
+remains paused. It
 uses Grok to confirm same-company/same-project matches against prior CRM events
 and reuses their original Lead IDs. Uncertain matches stay eligible as new events.
 The match inputs and decisions are cached in the sales DB for audit and retries. It
@@ -27,7 +30,9 @@ environment. With `--enroll-draft`, each successfully upserted prospect is
 sent through the documented `POST /api/v1/prospects` list route with `listId` and
 `enroll:false`; the provider's explicit `list.attached:true` acknowledgement and
 matching `listId` are required. The operation is idempotent by email and sends no
-email, enrolls no sequence step, and does not start or resume a campaign. The full
+email or direct enrollment request, and does not start or resume a campaign. A
+provider's native list-linked autosync, if configured, must be considered separately.
+The full
 custom-field snapshot is included on both new and existing-prospect upserts so an
 existing contact's source and personalization fields are not silently unset.
 
