@@ -54,6 +54,24 @@ COSTAR_TENANT_CSV=/Users/openclaw/Code/AEC-Lead-finder/provider-inputs/costar-te
 Keep all real exports and keys out of git. Recommended runtime-only directory:
 `/Users/openclaw/Code/AEC-Lead-finder/provider-inputs/`.
 
+## Raw Lead Queue
+
+When the operator wants to collect a larger batch before spending Grok enrichment
+capacity, download completed MapsData and WarmySender lead exports into the runtime
+`provider-inputs/` directory and run:
+
+```bash
+uv run python -m scout.raw_leads \
+  --source mapsdata=/Users/openclaw/Code/AEC-Lead-finder/provider-inputs/mapsdata-aec.csv \
+  --source warmysender=/Users/openclaw/Code/AEC-Lead-finder/provider-inputs/warmysender-aec.csv \
+  --source sales_navigator=/Users/openclaw/Code/AEC-Lead-finder/provider-inputs/sales-nav-aec.csv \
+  --output /Users/openclaw/Code/AEC-Lead-finder/results/raw-leads/$(date +%F)/raw_leads.csv
+```
+
+The queue is local and git-ignored. It preserves each original row and marks
+records `raw_pending_grok`; it does not qualify, verify, enroll, or send them.
+Run the later Grok enrichment workflow against that normalized CSV after review.
+
 ## MapsData Operating Notes
 
 The pipeline only reads completed MapsData jobs or CSV exports. It does not start
