@@ -71,19 +71,19 @@ mailboxes, subject, and both bodies exactly match the frozen entry. A legacy
 	  closed.
 
 An internal Jon diagnostic is a separate preflight route: when its exact
-allowed transformations pass, it is eligible evidence for the bound literal
+allowed URL substitution passes, it is eligible evidence for the bound literal
 route without requiring that a production recipient has already received a
 message. It is not evidence that a production recipient has received one.
 Its evidence must bind `actual_to` to `jon@automationinterns.com`, retain the
-approved production recipient as `target_recipient_email`, include exactly
-`Sent by Codex on Jon Schack's behalf.`, and identify the target-specific
-unsubscribe URL. The evidence also supplies the approved message's production
-unsubscribe URL, the Jon test-prospect/token provider ID, and a hash-bound
-`unsubscribe_binding`; the received plaintext/HTML must show the exact
-production-to-Jon URL substitution. The provider/token IDs are audited
-operator-captured fields; the local CLI does not decode a private token or
-independently query the provider, so an unreviewed self-authored record remains
-HOLD. A diagnostic never authorizes a production recipient.
+approved production recipient as `target_recipient_email`, contain no Codex or
+on-behalf disclosure, and identify the target-specific unsubscribe URL. The
+evidence also supplies the approved message's production unsubscribe URL, the
+Jon test-prospect/token provider ID, and a hash-bound `unsubscribe_binding`;
+the received plaintext/HTML must show the exact production-to-Jon URL
+substitution. The provider/token IDs are audited operator-captured fields; the
+local CLI does not decode a private token or independently query the provider,
+so an unreviewed self-authored record remains HOLD. A diagnostic never
+authorizes a production recipient.
 
 This is an enforceable guard for requests made by this repository. Warmy's
 independent scheduler, a manual launch in its UI, or another integration can

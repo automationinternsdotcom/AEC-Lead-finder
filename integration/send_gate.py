@@ -36,7 +36,9 @@ EXPECTED_SIGNATURE = (
 EXPECTED_ADDRESS = EXPECTED_SIGNATURE[-1]
 REQUIRED_PROPOSAL_SENTENCE = "Happy to provide a proposal when you're ready."
 INTERNAL_DIAGNOSTIC_RECIPIENT = "jon@automationinterns.com"
-ALLOWED_INTERNAL_DISCLOSURE = "Sent by Codex on Jon Schack's behalf."
+_WARMY_DISCLOSURE_RE = re.compile(
+    r"sent\s+by\s+codex\s+on\b[^\r\n.]{0,160}\b behalf\.?", re.IGNORECASE
+)
 _TOKEN_RE = re.compile(r"{{|}}")
 _ADDRESS_RE = re.compile(
     r"\b\d{3,6}[ \t]+[A-Za-z][A-Za-z0-9 .'-]{2,80},[ \t]*"
@@ -109,7 +111,6 @@ def _validate_received_bodies(
     *,
     expected_text_override: str | None = None,
     expected_html_override: str | None = None,
-    allowed_disclosure: str | None = None,
 ) -> None:
     """Bind both received MIME parts to the frozen main body and reviewed footer.
 
@@ -121,6 +122,8 @@ def _validate_received_bodies(
         raise ActivationBlocked("approved literal payload requires non-null text and HTML MIME bodies")
     if "[[wsy_opt_out]]" in actual_text.casefold() or "[[wsy_opt_out]]" in actual_html.casefold():
         raise ActivationBlocked("received evidence contains unresolved [[WSY_OPT_OUT]]")
+    if _WARMY_DISCLOSURE_RE.search(actual_text) or _WARMY_DISCLOSURE_RE.search(actual_html):
+        raise ActivationBlocked("Warmy payload must not contain a Codex/on-behalf disclosure")
     if _TOKEN_RE.search(actual_text) or _TOKEN_RE.search(actual_html):
         raise ActivationBlocked("received evidence contains unresolved merge tokens")
     expected_text = _normal_text(expected_text_override if expected_text_override is not None else approved_message.body_text)
@@ -133,11 +136,7 @@ def _validate_received_bodies(
         return
 
     if policy["mode"] == "provider_html_only":
-        if allowed_disclosure:
-            expected_text_with_disclosure = expected_text + "\n" + allowed_disclosure
-            if actual_text_norm != expected_text_with_disclosure:
-                raise ActivationBlocked("diagnostic plaintext does not match the approved URL substitution")
-        elif actual_text_norm != expected_text:
+        if actual_text_norm != expected_text:
             raise ActivationBlocked("received plaintext differs from the approved literal payload")
         # Warmy changes only the received HTML part on this route.  Compare the
         # literal HTML prefix after CRLF normalization; visible-text equality
@@ -146,10 +145,6 @@ def _validate_received_bodies(
             raise ActivationBlocked("received MIME main HTML differs from the approved literal payload")
         html_suffix_raw = actual_html_norm[len(expected_html) :]
         html_suffix = re.sub(r"\s+", " ", _rendered_text(html_suffix_raw)).strip()
-        if allowed_disclosure:
-            if html_suffix.casefold().count(allowed_disclosure.casefold()) != 1:
-                raise ActivationBlocked("internal diagnostic disclosure must occur exactly once")
-            html_suffix = html_suffix.replace(allowed_disclosure, "", 1).strip()
         _validate_footer_suffix(html_suffix, html_suffix_raw, policy, html_markup=True)
         return
 
@@ -160,8 +155,6 @@ def _validate_received_bodies(
     text_suffix = actual_text_sem[len(expected_text_sem) :].strip()
     if not text_suffix:
         raise ActivationBlocked("received provider footer is missing")
-    if allowed_disclosure:
-        text_suffix = text_suffix.replace(allowed_disclosure, "", 1).strip()
     # The older synthetic provider-appended mode is retained for test and
     # historical evidence, but its HTML prefix is still literal, not merely
     # visually equivalent.
@@ -169,8 +162,6 @@ def _validate_received_bodies(
         raise ActivationBlocked("received MIME main HTML differs from the approved literal payload")
     html_suffix_raw = actual_html_norm[len(expected_html) :]
     html_suffix = re.sub(r"\s+", " ", _rendered_text(html_suffix_raw)).strip()
-    if allowed_disclosure:
-        html_suffix = html_suffix.replace(allowed_disclosure, "", 1).strip()
     _validate_footer_suffix(text_suffix, text_suffix, policy)
     _validate_footer_suffix(html_suffix, html_suffix_raw, policy, html_markup=True)
 
@@ -263,8 +254,8 @@ def _validate_diagnostic_binding(sample: dict[str, Any], message: FrozenSendMess
             raise ActivationBlocked("internal diagnostic must be delivered to the Jon test recipient")
         if str(sample.get("target_recipient_email") or "").strip().casefold() != message.recipient_email.strip().casefold():
             raise ActivationBlocked("internal diagnostic target is not bound to the approved recipient")
-        if sample.get("codex_disclosure") != ALLOWED_INTERNAL_DISCLOSURE:
-            raise ActivationBlocked("internal diagnostic disclosure is not the approved exact text")
+        if str(sample.get("codex_disclosure") or "").strip() or _WARMY_DISCLOSURE_RE.search(str(sample.get("actual_body_text") or "")) or _WARMY_DISCLOSURE_RE.search(str(sample.get("actual_body_html") or "")):
+            raise ActivationBlocked("Warmy diagnostic must not contain a Codex/on-behalf disclosure")
         production_url = str(sample.get("production_unsubscribe_url") or "").strip()
         jon_url = str(sample.get("recipient_specific_unsubscribe_url") or "").strip()
         if (
@@ -292,7 +283,6 @@ def _validate_diagnostic_binding(sample: dict[str, Any], message: FrozenSendMess
         return {
             "expected_text": message.body_text.replace(production_url, jon_url, 1),
             "expected_html": message.body_html.replace(production_url, jon_url, 1),
-            "disclosure": ALLOWED_INTERNAL_DISCLOSURE,
         }
     if actual_to and actual_to != message.recipient_email.strip().casefold():
         raise ActivationBlocked("received message recipient differs from frozen recipient")
@@ -456,7 +446,6 @@ def validate_received_render_evidence(
                 footer_policy,
                 expected_text_override=diagnostic_binding["expected_text"] if diagnostic_binding else None,
                 expected_html_override=diagnostic_binding["expected_html"] if diagnostic_binding else None,
-                allowed_disclosure=diagnostic_binding["disclosure"] if diagnostic_binding else None,
             )
             if sample.get("step_index") != approved_message.step_index:
                 raise ValueError
@@ -726,6 +715,8 @@ def validate_frozen_manifest(
                 raise ActivationBlocked(f"blank {text_name} for {message.recipient_id} step {message.step_index}")
             if _TOKEN_RE.search(text) or "TODO_APPROVED_COPY" in text or "AETHER_POSTAL_ADDRESS" in text:
                 raise ActivationBlocked(f"unresolved template token in {text_name} for {message.recipient_id} step {message.step_index}")
+            if _WARMY_DISCLOSURE_RE.search(text):
+                raise ActivationBlocked(f"Warmy payload must not contain a Codex/on-behalf disclosure in {text_name}")
         if message.property_name not in message.subject:
             raise ActivationBlocked("subject must contain the actual property name")
         if message.property_context and _invalid_scalar(message.property_context):
