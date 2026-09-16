@@ -499,14 +499,21 @@ class SalesWorkflows:
         sequence = self.db.get_sequence(sequence_id)
         if not sequence:
             raise WorkflowRetry(f"sequence not found: {sequence_id}")
+        # Enrollment itself must never be the send boundary. Only a draft
+        # campaign may receive a prospect; the dedicated frozen start path
+        # validates the final audience immediately before provider activation.
+        draft_only = payload.get("draft_only") is True
+        if not draft_only:
+            raise ActivationBlocked("campaign enrollment is draft-only; use the frozen start gate")
         if sequence["eligibility_status"] != EligibilityStatus.READY.value:
             raise ActivationBlocked("sequence is not eligible")
         if not self.db.valid_approval_for_sequence(
             sequence_id,
             campaign_id=self.settings.warmy_campaign_id,
             campaign_manifest_hash=self.settings.warmy_campaign_manifest_hash,
+            require_rendered=getattr(self.settings, "campaign_start_enabled", False),
         ):
-            raise ActivationBlocked("sequence has no matching immutable approval batch")
+            raise ActivationBlocked("sequence has no matching immutable approval batch and frozen send approval")
         recipient = self.db.get_recipient(
             recipient_id=sequence["primary_recipient_id"]
         )
@@ -526,7 +533,6 @@ class SalesWorkflows:
         prospect_id = str(recipient.get("warmy_prospect_id") or "")
         if not prospect_id:
             raise WorkflowRetry("Warmy prospect has not been created")
-        draft_only = payload.get("draft_only") is True
         self.settings.require_campaign_enrollment(draft_only=draft_only)
         campaign = self.warmy.get_campaign(self.settings.warmy_campaign_id)
         if draft_only:
@@ -856,13 +862,18 @@ class SalesWorkflows:
             return
         if self.db.is_suppressed(mapping.email):
             return
-        self.settings.require_campaign_activation()
+        if payload.get("draft_only") is not True:
+            raise ActivationBlocked("campaign enrollment is draft-only; use the frozen start gate")
+        self.settings.require_campaign_enrollment(draft_only=True)
         if not mapping.why_line:
             raise ActivationBlocked("campaign activation blocked: why_line missing")
         if not mapping.warmy_prospect_id:
             raise WorkflowRetry("Warmy prospect has not been created")
         campaign = self.warmy.get_campaign(self.settings.warmy_campaign_id)
-        self._validate_live_campaign(campaign)
+        campaign_data = campaign.get("data") or campaign
+        if str(campaign_data.get("status") or "").casefold() != "draft":
+            raise ActivationBlocked("draft-only ingestion requires a live draft campaign")
+        self._validate_live_campaign(campaign, for_enrollment=True)
         route_key = f"warmy-route:{mapping.warmy_prospect_id}"
         route = self.db.get_state(route_key) or {}
         if route.get("outreach_id") not in (None, "", outreach_id):

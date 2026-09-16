@@ -517,7 +517,7 @@ def test_identity_exclusion_prevents_enrollment_even_if_sequence_is_ready():
         is_suppressed=lambda _:False,
         get_state=lambda key:{'reason':'wrong company'} if key=='identity-exclusion:company:wrong@example.com' else None)
     with pytest.raises(ActivationBlocked,match='different company'):
-        workflow.enroll_sequence({'sequence_id':'sequence'})
+        workflow.enroll_sequence({'sequence_id':'sequence', 'draft_only': True})
 
 
 def test_accuracy_review_hold_pauses_only_the_exact_company_email_pair():
@@ -532,4 +532,4 @@ def test_accuracy_review_hold_pauses_only_the_exact_company_email_pair():
         is_suppressed=lambda _:False,
         get_state=lambda key:{'reason':'verify employer'} if key=='accuracy-review-hold:company:review@example.com' else None)
     with pytest.raises(ActivationBlocked,match='accuracy review'):
-        workflow.enroll_sequence({'sequence_id':'sequence'})
+        workflow.enroll_sequence({'sequence_id':'sequence', 'draft_only': True})

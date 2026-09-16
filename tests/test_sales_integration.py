@@ -416,7 +416,7 @@ def test_unsubscribe_endpoint_is_stable_and_idempotent():
     assert len([key for key in db.work if key.startswith("suppression:")]) == 1
 
 
-def test_contact_sync_verification_and_enrollment_are_idempotent():
+def test_legacy_contact_enrollment_is_fail_closed_without_frozen_approval():
     db = MemoryDatabase()
     warmy = FakeWarmy()
     pipedrive = FakePipedrive()
@@ -440,9 +440,9 @@ def test_contact_sync_verification_and_enrollment_are_idempotent():
         db.get_mapping(outreach_id="outreach-1").verification_status
         == VerificationStatus.VALID
     )
-    workflows.enroll_contact({"outreach_id": "outreach-1"})
-    workflows.enroll_contact({"outreach_id": "outreach-1"})
-    assert warmy.enrolled == [("campaign-1", ["prospect-1"])]
+    with pytest.raises(ActivationBlocked, match="campaign enrollment is draft-only"):
+        workflows.enroll_contact({"outreach_id": "outreach-1"})
+    assert warmy.enrolled == []
 
 
 def test_warmy_prospect_is_reused_by_normalized_email():
@@ -714,7 +714,7 @@ def test_enrollment_requires_complete_activation_and_live_campaign():
         warmy=FakeWarmy(),
         pipedrive=FakePipedrive(),
     )
-    with pytest.raises(ActivationBlocked, match="CAMPAIGN_START_ENABLED"):
+    with pytest.raises(ActivationBlocked, match="campaign enrollment is draft-only"):
         workflows.enroll_contact({"outreach_id": "outreach-1"})
 
 

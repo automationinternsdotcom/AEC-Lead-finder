@@ -731,6 +731,7 @@ def test_approval_batch_releases_only_the_named_sequence(tmp_path):
         )
     campaign = _campaign()
     settings = replace(_activation_settings(campaign), campaign_start_enabled=False)
+    campaign["status"] = "draft"
     campaign.pop("mailboxIds")
     assert settings.campaign_enrollment_ready
     assert not settings.campaign_activation_ready
@@ -752,9 +753,9 @@ def test_approval_batch_releases_only_the_named_sequence(tmp_path):
     workflows = SalesWorkflows(
         settings, db, warmy=warmy, pipedrive=FakePipedrive()
     )
-    workflows.enroll_sequence({"sequence_id": "sequence-1"})
+    workflows.enroll_sequence({"sequence_id": "sequence-1", "draft_only": True})
     with pytest.raises(ActivationBlocked, match="approval batch"):
-        workflows.enroll_sequence({"sequence_id": "sequence-2"})
+        workflows.enroll_sequence({"sequence_id": "sequence-2", "draft_only": True})
     assert ("enroll", "prospect-1") in warmy.calls
     assert ("enroll", "prospect-2") not in warmy.calls
     assert db.get_state(

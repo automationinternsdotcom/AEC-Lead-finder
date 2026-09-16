@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from .config import ActivationBlocked
 from .models import MappingRecord, WorkItem
 
 
@@ -18,6 +19,7 @@ class MemoryDatabase:
         self.tokens: dict[str, str] = {}
         self.operations: dict[tuple[str, str], dict[str, Any]] = {}
         self.state: dict[str, dict[str, Any]] = {}
+        self.sent_messages: dict[str, dict[str, Any]] = {}
         self.runs: dict[str, dict[str, Any]] = {}
         self._next_id = 1
 
@@ -149,6 +151,22 @@ class MemoryDatabase:
 
     def set_state(self, key, value):
         self.state[key] = value
+
+    def valid_frozen_send_approval(self, campaign_id, campaign_manifest_hash, **kwargs):
+        """Mirror the real DB contract; legacy test routes fail closed."""
+        raise ActivationBlocked("frozen recipient-specific send approval is required")
+
+    def record_sent_message(self, message_id, content_hash, recipient_id, sent_at, *, provider=""):
+        self.sent_messages[message_id] = {
+            "content_hash": content_hash,
+            "recipient_id": recipient_id,
+            "sent_at": sent_at,
+            "provider": provider,
+        }
+
+    def has_sent_message(self, message_id, recipient_id, sent_at):
+        item = self.sent_messages.get(message_id)
+        return bool(item and item["recipient_id"] == recipient_id and item["sent_at"] == sent_at)
 
     def record_run(self, run_id, source_file, discovered_count, enqueued_count):
         self.runs[run_id] = {

@@ -33,3 +33,17 @@ Start commands from the repo root. Keep secrets in `.env`; do not commit them.
 Use `--apollo-go` only when the operator explicitly wants Apollo credits spent.
 NewsAPI, Apify, MapsData, and Costar are manual-only via `--newsapi`, `--apify`,
 `--mapsdata`, and `--costar`.
+
+## Production send contract
+
+- Production Aether email starts and enrollments must use the validated
+  recipient-specific frozen-send gate. Direct Warmy MCP/UI launches or other
+  integrations must not be treated as an alternate approval path. This local
+  contract does not claim to technically intercept Warmy's remote scheduler.
+- Keep the legacy production campaign paused until its queue, live readback,
+  received MIME evidence, and global send ledger are reconciled and reviewed.
+- An internal diagnostic send is permitted only when Jon explicitly authorizes
+  it, and it must be a contained single-recipient, single-step literal route
+  with the same sender, signature, body, evidence, and stop controls. It is not
+  production authorization and cannot be used to bypass the gate for other
+  recipients.

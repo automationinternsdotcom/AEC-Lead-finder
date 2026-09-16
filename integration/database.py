@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .config import ActivationBlocked
 from .models import (
     ApprovalBatch,
     CompanySync,
@@ -22,7 +23,9 @@ from .models import (
     SequenceApprovalState,
     SuppressionReason,
     WorkItem,
+    FrozenSendManifest,
 )
+from .send_gate import validate_frozen_manifest
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS webhook_events (
@@ -131,6 +134,30 @@ CREATE TABLE IF NOT EXISTS app_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT '{}',
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS send_reservations (
+  message_hash TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  recipient_id TEXT NOT NULL,
+  recipient_email TEXT NOT NULL DEFAULT '',
+  provider_prospect_id TEXT NOT NULL DEFAULT '',
+  sequence_id TEXT NOT NULL DEFAULT '',
+  step_index INTEGER NOT NULL DEFAULT 0,
+  scheduled_day TEXT NOT NULL,
+  reserved_at TEXT NOT NULL,
+  sent_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS send_reservations_day_idx
+  ON send_reservations(scheduled_day);
+
+CREATE TABLE IF NOT EXISTS sent_messages (
+  message_id TEXT PRIMARY KEY,
+  content_hash TEXT NOT NULL,
+  recipient_id TEXT NOT NULL,
+  sent_at TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS integration_runs (
@@ -425,6 +452,12 @@ class Database:
             "outreach_sequences": {
                 "reply_disposition": "TEXT",
                 "reply_received_at": "TEXT",
+            },
+            "send_reservations": {
+                "recipient_email": "TEXT NOT NULL DEFAULT ''",
+                "provider_prospect_id": "TEXT NOT NULL DEFAULT ''",
+                "sequence_id": "TEXT NOT NULL DEFAULT ''",
+                "step_index": "INTEGER NOT NULL DEFAULT 0",
             },
         }
         for table, columns in additions.items():
@@ -1465,6 +1498,14 @@ class Database:
         if len(batch.sequence_ids) > batch.maximum_recipient_count:
             raise ValueError("approval batch exceeds its recipient ceiling")
         now = _now()
+        render_state = None
+        if batch.render_manifest is not None:
+            validate_frozen_manifest(
+                batch.render_manifest,
+                expected_campaign_id=batch.campaign_id,
+                expected_campaign_manifest_hash=batch.campaign_manifest_hash,
+                expected_sequence_ids=set(batch.sequence_ids),
+            )
         with self.connection(immediate=True) as conn:
             existing = conn.execute(
                 "SELECT payload FROM approval_batches WHERE batch_id=?",
@@ -1508,6 +1549,209 @@ class Database:
                        WHERE sequence_id=? AND approval_state='draft'""",
                     (batch.batch_id, now, sequence_id),
                 )
+            if batch.render_manifest is not None:
+                # Store the complete artifact, not only its hash, so a later
+                # executor can revalidate every literal payload atomically.
+                render_state = {
+                    "manifest": batch.render_manifest.model_dump(mode="json"),
+                    "batch_id": batch.batch_id,
+                    "approved_by": batch.approved_by,
+                    "approved_at": batch.approved_at.astimezone(UTC).isoformat(),
+                    "expires_at": batch.expires_at.astimezone(UTC).isoformat(),
+                }
+        if render_state is not None:
+            self.set_state(f"send-approval:{batch.campaign_id}", render_state)
+
+    def valid_frozen_send_approval(
+        self,
+        campaign_id: str,
+        campaign_manifest_hash: str,
+        *,
+        now: datetime | None = None,
+        require_future: bool = False,
+    ) -> dict[str, Any]:
+        """Return verified send approval or raise before provider activation."""
+        state = self.get_state(f"send-approval:{campaign_id}")
+        if not state or not isinstance(state.get("manifest"), dict):
+            raise ActivationBlocked("frozen recipient-specific send approval is required")
+        expires_raw = state.get("expires_at")
+        try:
+            expires_at = datetime.fromisoformat(str(expires_raw))
+        except (TypeError, ValueError) as exc:
+            raise ActivationBlocked("frozen send approval expiry is malformed") from exc
+        current = now or datetime.now(UTC)
+        if expires_at.tzinfo is None or expires_at <= current:
+            raise ActivationBlocked("frozen send approval has expired")
+        result = validate_frozen_manifest(
+            state["manifest"],
+            expected_campaign_id=campaign_id,
+            expected_campaign_manifest_hash=campaign_manifest_hash,
+            now=current,
+            require_future=require_future,
+        )
+        if require_future:
+            from .send_gate import validate_received_render_evidence
+
+            evidence = self.get_state(f"send-render-evidence:{campaign_id}")
+            if not evidence:
+                raise ActivationBlocked("actual received provider-render evidence is required")
+            validate_received_render_evidence(evidence, state["manifest"], now=current)
+            manifest_value = FrozenSendManifest.model_validate(state["manifest"])
+            for message in manifest_value.messages:
+                if message.step_index <= 0:
+                    continue
+                if not self.has_sent_message(
+                    message.prior_message_id,
+                    message.recipient_id,
+                    message.prior_sent_at,
+                ):
+                    raise ActivationBlocked(
+                        "follow-up prior_sent_at/id must match an actual provider send record"
+                    )
+        return result
+
+    def record_sent_message(
+        self,
+        message_id: str,
+        content_hash: str,
+        recipient_id: str,
+        sent_at: datetime,
+        *,
+        provider: str = "",
+    ) -> None:
+        """Persist the provider's acknowledged send for future cadence gates."""
+        if sent_at.tzinfo is None:
+            raise ValueError("sent_at must be timezone-aware")
+        with self.connection() as conn:
+            conn.execute(
+                """INSERT INTO sent_messages(message_id,content_hash,recipient_id,sent_at,provider)
+                   VALUES (?,?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET
+                   content_hash=excluded.content_hash, recipient_id=excluded.recipient_id,
+                   sent_at=excluded.sent_at, provider=excluded.provider""",
+                (message_id, content_hash, recipient_id, sent_at.astimezone(UTC).isoformat(), provider),
+            )
+
+    def has_sent_message(
+        self, message_id: str, recipient_id: str, sent_at: datetime | None
+    ) -> bool:
+        if not message_id or sent_at is None or sent_at.tzinfo is None:
+            return False
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT recipient_id, sent_at FROM sent_messages WHERE message_id=?",
+                (message_id,),
+            ).fetchone()
+        if not row:
+            return False
+        try:
+            actual = datetime.fromisoformat(str(row["sent_at"]))
+        except ValueError:
+            return False
+        return row["recipient_id"] == recipient_id and actual == sent_at.astimezone(UTC)
+
+    def save_render_evidence(
+        self,
+        campaign_id: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate and atomically retain external received-message evidence."""
+        state = self.get_state(f"send-approval:{campaign_id}")
+        if not state or not isinstance(state.get("manifest"), dict):
+            raise ActivationBlocked("frozen recipient-specific send approval is required first")
+        from .send_gate import validate_received_render_evidence
+
+        result = validate_received_render_evidence(evidence, state["manifest"])
+        self.set_state(f"send-render-evidence:{campaign_id}", evidence)
+        return result
+
+    def save_live_read_evidence(
+        self,
+        campaign_id: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate and retain a fresh UI read for Warmy's hidden fields."""
+        state = self.get_state(f"send-approval:{campaign_id}")
+        if not state or not isinstance(state.get("manifest"), dict):
+            raise ActivationBlocked("frozen recipient-specific send approval is required first")
+        from .send_gate import validate_live_read_evidence
+
+        manifest = FrozenSendManifest.model_validate(state["manifest"])
+        if len(manifest.messages) != 1:
+            raise ActivationBlocked("live UI read evidence requires a dedicated one-recipient campaign")
+        result = validate_live_read_evidence(
+            evidence,
+            manifest.messages[0],
+            expected_campaign_id=campaign_id,
+        )
+        self.set_state(f"send-live-read:{campaign_id}", evidence)
+        return result
+
+    def reserve_frozen_sends(
+        self,
+        campaign_id: str,
+        manifest: FrozenSendManifest | dict[str, Any],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Atomically reserve unique message hashes against the global cap."""
+        from zoneinfo import ZoneInfo
+
+        from .send_gate import validate_frozen_manifest
+
+        value = FrozenSendManifest.model_validate(manifest)
+        validate_frozen_manifest(value, expected_campaign_id=campaign_id)
+        zone = ZoneInfo(value.schedule_timezone)
+        current = now or datetime.now(UTC)
+        with self.connection(immediate=True) as conn:
+            inserted = 0
+            for message in value.messages:
+                day = message.scheduled_at.astimezone(zone).date().isoformat()
+                identity = (
+                    message.recipient_id,
+                    message.recipient_email,
+                    message.provider_prospect_id,
+                    message.sequence_id,
+                    message.step_index,
+                )
+                identity_row = conn.execute(
+                    """SELECT message_hash, campaign_id FROM send_reservations
+                       WHERE recipient_id=? AND recipient_email=?
+                         AND provider_prospect_id=? AND sequence_id=? AND step_index=?""",
+                    identity,
+                ).fetchone()
+                if identity_row:
+                    if identity_row["message_hash"] != message.content_hash or identity_row["campaign_id"] != campaign_id:
+                        raise ActivationBlocked(
+                            "recipient/sequence/step is already reserved by a different campaign or payload"
+                        )
+                    continue
+                exists = conn.execute(
+                    "SELECT campaign_id FROM send_reservations WHERE message_hash=?",
+                    (message.content_hash,),
+                ).fetchone()
+                if exists:
+                    if exists["campaign_id"] != campaign_id:
+                        raise ActivationBlocked("message hash is already reserved by a different campaign")
+                    continue
+                count = conn.execute(
+                    "SELECT COUNT(*) AS n FROM send_reservations WHERE scheduled_day=?",
+                    (day,),
+                ).fetchone()["n"]
+                if int(count) >= value.daily_send_cap:
+                    raise ActivationBlocked(
+                        "global daily send reservation cap reached; duplicate retries are idempotent"
+                    )
+                conn.execute(
+                    """INSERT INTO send_reservations(
+                       message_hash,campaign_id,recipient_id,recipient_email,
+                       provider_prospect_id,sequence_id,step_index,scheduled_day,reserved_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (message.content_hash, campaign_id, message.recipient_id,
+                     message.recipient_email, message.provider_prospect_id,
+                     message.sequence_id, message.step_index, day, current.isoformat()),
+                )
+                inserted += 1
+        return {"status": "reserved", "campaign_id": campaign_id, "reserved": inserted}
 
     def valid_approval_for_sequence(
         self,
@@ -1515,11 +1759,12 @@ class Database:
         *,
         campaign_id: str,
         campaign_manifest_hash: str,
+        require_rendered: bool = False,
     ) -> bool:
         now = _now()
         with self.connection() as conn:
             row = conn.execute(
-                """SELECT s.merge_hash, s.approval_state, b.payload
+                """SELECT s.merge_hash, s.approval_state, s.primary_recipient_id, b.payload
                    FROM outreach_sequences s
                    JOIN approval_batches b ON b.batch_id=s.approval_batch_id
                    WHERE s.sequence_id=? AND b.campaign_id=?
@@ -1530,10 +1775,32 @@ class Database:
         if not row or row["approval_state"] != SequenceApprovalState.APPROVED.value:
             return False
         batch = ApprovalBatch.model_validate(json.loads(row["payload"]))
-        return (
+        valid = (
             sequence_id in batch.sequence_ids
             and batch.merge_hashes.get(sequence_id) == row["merge_hash"]
             and len(batch.sequence_ids) <= batch.maximum_recipient_count
+        )
+        if not valid or not require_rendered:
+            return valid
+        try:
+            self.valid_frozen_send_approval(
+                campaign_id, campaign_manifest_hash, require_future=require_rendered
+            )
+        except ActivationBlocked:
+            return False
+        manifest = self.get_state(f"send-approval:{campaign_id}")["manifest"]
+        entries = [
+            item for item in manifest.get("messages", [])
+            if item.get("sequence_id") == sequence_id
+        ]
+        recipient = self.get_recipient(recipient_id=row["primary_recipient_id"])
+        if not entries or not recipient:
+            return False
+        expected_recipient = str(recipient.get("normalized_email") or "").strip().casefold()
+        return all(
+            item.get("recipient_id") == row["primary_recipient_id"]
+            and str(item.get("recipient_email") or "").strip().casefold() == expected_recipient
+            for item in entries
         )
 
     def cache_email_verification(

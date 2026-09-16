@@ -290,6 +290,29 @@ def main() -> int:
     approve_batch.add_argument("batch")
     approve_batch.add_argument("--apply", action="store_true")
 
+    validate_send_manifest = commands.add_parser("validate-send-manifest")
+    validate_send_manifest.add_argument("manifest")
+
+    record_render_evidence = commands.add_parser("record-render-evidence")
+    record_render_evidence.add_argument("evidence")
+    record_render_evidence.add_argument("--apply", action="store_true")
+
+    record_live_read = commands.add_parser("record-live-read")
+    record_live_read.add_argument("evidence")
+    record_live_read.add_argument("--apply", action="store_true")
+
+    record_provider_send = commands.add_parser("record-provider-send")
+    record_provider_send.add_argument("message_id")
+    record_provider_send.add_argument("content_hash")
+    record_provider_send.add_argument("recipient_id")
+    record_provider_send.add_argument("sent_at")
+    record_provider_send.add_argument("--provider", default="")
+    record_provider_send.add_argument("--apply", action="store_true")
+
+    preview_next_five = commands.add_parser("preview-next-five")
+    preview_next_five.add_argument("review_export")
+    preview_next_five.add_argument("--output", default="")
+
     reconcile = commands.add_parser("reconcile-csv")
     reconcile.add_argument("csv")
     reconcile.add_argument("--run-id", default="reconcile-preview")
@@ -352,6 +375,83 @@ def main() -> int:
             }
         )
         return 0
+    if args.command == "validate-send-manifest":
+        from .send_gate import validate_frozen_manifest
+
+        manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        _json(
+            validate_frozen_manifest(
+                manifest,
+                expected_campaign_id=settings.warmy_campaign_id or None,
+                expected_campaign_manifest_hash=settings.warmy_campaign_manifest_hash or None,
+            )
+        )
+        return 0
+    if args.command == "record-render-evidence":
+        evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
+        db = Database(settings.database_path)
+        if args.apply:
+            result = db.save_render_evidence(settings.warmy_campaign_id, evidence)
+        else:
+            state = db.get_state(f"send-approval:{settings.warmy_campaign_id}") or {}
+            from .send_gate import validate_received_render_evidence
+
+            result = validate_received_render_evidence(evidence, state.get("manifest") or {})
+        _json({**result, "stored": args.apply})
+        return 0
+    if args.command == "record-live-read":
+        evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
+        db = Database(settings.database_path)
+        if args.apply:
+            result = db.save_live_read_evidence(settings.warmy_campaign_id, evidence)
+        else:
+            state = db.get_state(f"send-approval:{settings.warmy_campaign_id}") or {}
+            manifest = state.get("manifest") or {}
+            messages = manifest.get("messages") or []
+            if len(messages) != 1:
+                raise ActivationBlocked("live UI read preview requires one approved recipient")
+            from .send_gate import validate_live_read_evidence
+
+            result = validate_live_read_evidence(
+                evidence,
+                messages[0],
+                expected_campaign_id=settings.warmy_campaign_id,
+            )
+        _json({**result, "stored": args.apply})
+        return 0
+    if args.command == "record-provider-send":
+        from datetime import datetime
+
+        sent_at = datetime.fromisoformat(args.sent_at)
+        if not args.apply:
+            _json({
+                "valid": sent_at.tzinfo is not None,
+                "would_store": {
+                    "message_id": args.message_id,
+                    "content_hash": args.content_hash,
+                    "recipient_id": args.recipient_id,
+                    "sent_at": sent_at.isoformat(),
+                    "provider": args.provider,
+                },
+            })
+            return 0
+        db = Database(settings.database_path)
+        db.record_sent_message(
+            args.message_id, args.content_hash, args.recipient_id, sent_at,
+            provider=args.provider,
+        )
+        _json({"stored": True, "message_id": args.message_id})
+        return 0
+    if args.command == "preview-next-five":
+        from .next_five import build_next_five_preview
+
+        preview = build_next_five_preview(
+            json.loads(Path(args.review_export).read_text(encoding="utf-8"))
+        )
+        if args.output:
+            Path(args.output).write_text(json.dumps(preview, indent=2) + "\n", encoding="utf-8")
+        _json({**preview, "output": args.output or None})
+        return 0
     if args.command == "enqueue-handoff":
         _json(enqueue_handoff(Database(settings.database_path), args.handoff))
         return 0
@@ -362,6 +462,11 @@ def main() -> int:
         if not args.apply:
             _json({"valid": True, "would_approve": batch.model_dump(mode="json")})
             return 0
+        if batch.render_manifest is None:
+            raise ActivationBlocked(
+                "approval requires a frozen recipient-specific send manifest; "
+                "template fields or provider-rendered canaries are insufficient"
+            )
         db = Database(settings.database_path)
         db.save_approval_batch(batch)
         enqueued = 0
@@ -369,7 +474,7 @@ def main() -> int:
             if db.enqueue_work(
                 "warmy.sequence.enroll",
                 f"warmy:sequence:enroll:{batch.batch_id}:{sequence_id}",
-                {"sequence_id": sequence_id, "approval_batch_id": batch.batch_id},
+                {"sequence_id": sequence_id, "approval_batch_id": batch.batch_id, "draft_only": True},
             ):
                 enqueued += 1
         _json(
@@ -618,9 +723,16 @@ def main() -> int:
             )
             return 0
         settings.require_campaign_activation()
-        from .variants import require_verified
-        require_verified(Database(settings.database_path), settings.warmy_campaign_id,
-                         settings.warmy_campaign_manifest_hash)
+        # Warmy's external scheduler cannot be intercepted by local code.  A
+        # start request issued through this pipeline is therefore allowed only
+        # when a complete literal recipient-specific approval artifact is
+        # present and still future-dated.
+        db = Database(settings.database_path)
+        db.valid_frozen_send_approval(
+            settings.warmy_campaign_id,
+            settings.warmy_campaign_manifest_hash,
+            require_future=True,
+        )
         warmy = WarmyClient(settings)
         try:
             _json(

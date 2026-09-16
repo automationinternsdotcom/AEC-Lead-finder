@@ -16,7 +16,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .config import Settings
+from .config import ActivationBlocked, Settings
 from scout.copy_grammar import review_copy
 
 
@@ -31,6 +31,45 @@ class ProviderError(RuntimeError):
 
 class GmailHistoryExpired(RuntimeError):
     """The Gmail history cursor aged out and requires a bounded resync."""
+
+
+def validate_provider_prospect(
+    response: dict[str, Any],
+    *,
+    expected_id: str,
+    expected_email: str,
+    initial_step: bool,
+) -> dict[str, Any]:
+    """Validate Warmy's documented prospect read before a literal start.
+
+    Warmy exposes ``globalStatus``, ``suppressionReason``, and
+    ``lastRepliedAt`` on the prospect object. Missing status is not evidence of
+    sendability, and direct-object and ``data``-wrapped responses are both
+    accepted because the connector exposes both shapes.
+    """
+    prospect = response.get("data", response) if isinstance(response, dict) else None
+    if not isinstance(prospect, dict):
+        raise ActivationBlocked("provider prospect readback is unavailable")
+    if str(prospect.get("id") or "").strip() != expected_id:
+        raise ActivationBlocked("provider prospect ID differs from frozen recipient")
+    live_email = str(prospect.get("email") or "").strip().casefold()
+    if not live_email or live_email != expected_email.strip().casefold():
+        raise ActivationBlocked("provider prospect email differs from frozen recipient")
+    global_status = str(prospect.get("globalStatus") or "").strip().casefold()
+    if not global_status:
+        raise ActivationBlocked("provider prospect globalStatus is required")
+    if global_status != "active":
+        raise ActivationBlocked("provider prospect is not globally active")
+    if str(prospect.get("suppressionReason") or "").strip():
+        raise ActivationBlocked("provider prospect has a suppression reason")
+    if str(prospect.get("lastRepliedAt") or "").strip():
+        raise ActivationBlocked("provider prospect has a prior reply")
+    if initial_step and any(
+        str(prospect.get(field) or "").strip()
+        for field in ("lastContactedAt", "last_contacted_at", "lastSentAt", "last_sent_at")
+    ):
+        raise ActivationBlocked("initial recipient already has provider contact activity; reconcile before retry")
+    return prospect
 
 
 class WarmyClient:
@@ -208,13 +247,19 @@ class WarmyClient:
     def get_campaign(self, campaign_id: str) -> dict:
         return self._request("GET", f"campaigns/{campaign_id}")
 
+    def get_prospect(self, prospect_id: str) -> dict:
+        """Read the provider prospect immediately before activation."""
+        return self._request("GET", f"prospects/{prospect_id}")
+
     def enroll(
         self, campaign_id: str, prospect_ids: list[str], operation_key: str
     ) -> dict:
         if not self.settings.warmy_enrollment_enabled:
-            from .config import ActivationBlocked
-
             raise ActivationBlocked("Warmy enrollment is disabled")
+        campaign_response = self.get_campaign(campaign_id)
+        campaign = campaign_response.get("data", campaign_response) if isinstance(campaign_response, dict) else None
+        if not isinstance(campaign, dict) or str(campaign.get("status") or "").casefold() != "draft":
+            raise ActivationBlocked("Warmy enrollment is permitted only for a draft campaign")
         return self._request(
             "POST",
             f"campaigns/{campaign_id}/enrollments",
@@ -264,9 +309,50 @@ class WarmyClient:
     def start_campaign(self, campaign_id: str, operation_key: str) -> dict:
         self.settings.require_campaign_activation()
         from .database import Database
-        from .variants import require_verified
-        require_verified(Database(self.settings.database_path), campaign_id,
-                         self.settings.warmy_campaign_manifest_hash)
+        db = Database(self.settings.database_path)
+        db.valid_frozen_send_approval(
+            campaign_id,
+            self.settings.warmy_campaign_manifest_hash,
+            require_future=True,
+        )
+        from .send_gate import validate_live_literal_campaign
+        approval_state = db.get_state(f"send-approval:{campaign_id}") or {}
+        manifest = approval_state.get("manifest") or {}
+        messages = manifest.get("messages") or []
+        if len(messages) != 1:
+            raise ActivationBlocked(
+                "live activation requires a dedicated one-recipient one-step frozen campaign"
+            )
+        current = self.get_campaign(campaign_id)
+        campaign = current.get("data") if isinstance(current, dict) else current
+        if not isinstance(campaign, dict):
+            campaign = current
+        if str(campaign.get("status") or "").casefold() not in {"draft", "paused"}:
+            raise ActivationBlocked(
+                "campaign must be draft or paused immediately before activation"
+            )
+        # Warmy API readback omits exact campaign membership/mailboxes.  The
+        # operator must first record a fresh, hashed UI read for those fields;
+        # an unfiltered prospect listing is not acceptable activation evidence.
+        live_read_evidence = db.get_state(f"send-live-read:{campaign_id}")
+        provider_prospect_id = str(messages[0].get("provider_prospect_id") or "").strip()
+        if not provider_prospect_id:
+            raise ActivationBlocked("frozen recipient lacks a provider prospect ID")
+        prospect_response = self.get_prospect(provider_prospect_id)
+        validate_provider_prospect(
+            prospect_response,
+            expected_id=provider_prospect_id,
+            expected_email=str(messages[0].get("recipient_email") or ""),
+            initial_step=int(messages[0].get("step_index") or 0) == 0,
+        )
+        validate_live_literal_campaign(
+            current,
+            messages[0],
+            expected_campaign_id=campaign_id,
+            expected_mailbox_ids=set(self.settings.warmy_mailbox_ids),
+            live_read_evidence=live_read_evidence,
+        )
+        db.reserve_frozen_sends(campaign_id, manifest)
         return self._request(
             "POST",
             f"campaigns/{campaign_id}/start",

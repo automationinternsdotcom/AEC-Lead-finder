@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -204,6 +204,78 @@ class SalesHandoff(BaseModel):
     content_hash: str = Field(min_length=1)
 
 
+class FrozenSendMessage(BaseModel):
+    """One literal, recipient-specific message approved for a send window.
+
+    This is deliberately separate from the campaign template.  It is the
+    payload that our executor can compare immediately before handing a send
+    request to a provider; merge tags are not an approval mechanism.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sequence_id: str = Field(min_length=1)
+    recipient_id: str = Field(min_length=1)
+    recipient_email: str = Field(min_length=3)
+    provider_prospect_id: str = ""
+    mailbox_id: str = ""
+    first_name: str = Field(min_length=1)
+    company: str = Field(min_length=1)
+    property_name: str = Field(min_length=1)
+    # Some reviewed why-lines use a concise property context rather than the
+    # full CRM title.  When supplied, this excerpt is itself reviewed and is
+    # included in the frozen content hash.
+    property_context: str = ""
+    property_context_reviewed: bool = False
+    sender_name: str = Field(min_length=1)
+    sender_email: str = Field(min_length=3)
+    step_index: int = Field(ge=0)
+    scheduled_at: datetime
+    subject: str = Field(min_length=1)
+    body_text: str = Field(min_length=1)
+    body_html: str = Field(min_length=1)
+    # Source grounding is required for the initial note. Follow-ups are
+    # approved as fresh current-step artifacts and must not repeat the initial
+    # why-line or source facts merely to satisfy a schema.
+    why_line: str = ""
+    source_facts: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    source_facts_reviewed: bool = False
+    prior_sent_at: datetime | None = None
+    prior_message_id: str = ""
+    content_hash: str = Field(min_length=1)
+
+    @field_validator("recipient_email", "sender_email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if "@" not in normalized or normalized.startswith("@"):
+            raise ValueError("message email must be a valid address")
+        return normalized
+
+
+class FrozenSendManifest(BaseModel):
+    """Immutable approval artifact for literal delivery payloads.
+
+    ``provider_rendered_canary`` is retained as an evidence label only.  It
+    can never satisfy the send gate because a canary does not prove the exact
+    payload a dynamic provider merge route will later send.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = Field(default=1, ge=1)
+    campaign_id: str = Field(min_length=1)
+    campaign_manifest_hash: str = Field(min_length=1)
+    route: Literal["literal_frozen", "provider_rendered_canary"] = "literal_frozen"
+    daily_send_cap: int = Field(default=5, ge=1, le=5)
+    schedule_timezone: str = "Etc/GMT+5"
+    first_send_at: datetime | None = None
+    messages: list[FrozenSendMessage] = Field(min_length=1)
+    manifest_hash: str = Field(min_length=1)
+
+
+
 class ApprovalBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -216,6 +288,9 @@ class ApprovalBatch(BaseModel):
     approved_by: str = Field(min_length=1)
     approved_at: datetime
     expires_at: datetime
+    # Optional for backwards-compatible draft-only ingestion.  A batch cannot
+    # authorize a sending campaign unless this frozen artifact is present.
+    render_manifest: FrozenSendManifest | None = None
 
     @field_validator("sequence_ids")
     @classmethod
