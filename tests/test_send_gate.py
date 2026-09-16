@@ -94,6 +94,8 @@ def test_literal_manifest_is_hash_complete_and_valid():
         ("subject", "Jane, about Company 0", "actual property"),
         ("body_text", "{{firstName}}", "template token"),
         ("body_text", "Sent by Codex on Jon Schack's behalf.", "disclosure"),
+        ("body_text", "Sent by Codex.", "disclosure"),
+        ("body_html", "<p>Sent</p><p>by</p><p>Codex.</p>", "disclosure"),
         ("body_text", "bad body", "initial body"),
     ],
 )

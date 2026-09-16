@@ -36,8 +36,14 @@ EXPECTED_SIGNATURE = (
 EXPECTED_ADDRESS = EXPECTED_SIGNATURE[-1]
 REQUIRED_PROPOSAL_SENTENCE = "Happy to provide a proposal when you're ready."
 INTERNAL_DIAGNOSTIC_RECIPIENT = "jon@automationinterns.com"
+# Warmy must not disclose the internal agent or that it acted on Jon's behalf.
+# Match only explicit agent-disclosure language; ordinary copy containing a
+# company/product named "Codex" remains valid.  The rendered-text helper below
+# makes this also catch text split across HTML elements or HTML entities.
 _WARMY_DISCLOSURE_RE = re.compile(
-    r"sent\s+by\s+codex\s+on\b[^\r\n.]{0,160}\b behalf\.?", re.IGNORECASE
+    r"(?:\b(?:sent|written|generated|prepared)\s+by\s+codex\b|"
+    r"\bon\s+jon\s+schack(?:['’]s)?\s+behalf\b)",
+    re.IGNORECASE,
 )
 _TOKEN_RE = re.compile(r"{{|}}")
 _ADDRESS_RE = re.compile(
@@ -48,7 +54,12 @@ _ADDRESS_RE = re.compile(
 
 def _rendered_text(value: str) -> str:
     """Compare semantic HTML content, not source markup/escaping."""
-    return html.unescape(re.sub(r"<[^>]+>", " ", value))
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", value))).strip()
+
+
+def _contains_warmy_disclosure(value: Any) -> bool:
+    """Detect explicit Codex/agent disclosure in text or rendered HTML."""
+    return isinstance(value, str) and bool(_WARMY_DISCLOSURE_RE.search(_rendered_text(value)))
 
 
 def _semantic_contains(text: str, expected: str) -> bool:
@@ -122,7 +133,7 @@ def _validate_received_bodies(
         raise ActivationBlocked("approved literal payload requires non-null text and HTML MIME bodies")
     if "[[wsy_opt_out]]" in actual_text.casefold() or "[[wsy_opt_out]]" in actual_html.casefold():
         raise ActivationBlocked("received evidence contains unresolved [[WSY_OPT_OUT]]")
-    if _WARMY_DISCLOSURE_RE.search(actual_text) or _WARMY_DISCLOSURE_RE.search(actual_html):
+    if _contains_warmy_disclosure(actual_text) or _contains_warmy_disclosure(actual_html):
         raise ActivationBlocked("Warmy payload must not contain a Codex/on-behalf disclosure")
     if _TOKEN_RE.search(actual_text) or _TOKEN_RE.search(actual_html):
         raise ActivationBlocked("received evidence contains unresolved merge tokens")
@@ -254,7 +265,7 @@ def _validate_diagnostic_binding(sample: dict[str, Any], message: FrozenSendMess
             raise ActivationBlocked("internal diagnostic must be delivered to the Jon test recipient")
         if str(sample.get("target_recipient_email") or "").strip().casefold() != message.recipient_email.strip().casefold():
             raise ActivationBlocked("internal diagnostic target is not bound to the approved recipient")
-        if str(sample.get("codex_disclosure") or "").strip() or _WARMY_DISCLOSURE_RE.search(str(sample.get("actual_body_text") or "")) or _WARMY_DISCLOSURE_RE.search(str(sample.get("actual_body_html") or "")):
+        if str(sample.get("codex_disclosure") or "").strip() or _contains_warmy_disclosure(sample.get("actual_body_text")) or _contains_warmy_disclosure(sample.get("actual_body_html")):
             raise ActivationBlocked("Warmy diagnostic must not contain a Codex/on-behalf disclosure")
         production_url = str(sample.get("production_unsubscribe_url") or "").strip()
         jon_url = str(sample.get("recipient_specific_unsubscribe_url") or "").strip()
@@ -715,7 +726,7 @@ def validate_frozen_manifest(
                 raise ActivationBlocked(f"blank {text_name} for {message.recipient_id} step {message.step_index}")
             if _TOKEN_RE.search(text) or "TODO_APPROVED_COPY" in text or "AETHER_POSTAL_ADDRESS" in text:
                 raise ActivationBlocked(f"unresolved template token in {text_name} for {message.recipient_id} step {message.step_index}")
-            if _WARMY_DISCLOSURE_RE.search(text):
+            if _contains_warmy_disclosure(text):
                 raise ActivationBlocked(f"Warmy payload must not contain a Codex/on-behalf disclosure in {text_name}")
         if message.property_name not in message.subject:
             raise ActivationBlocked("subject must contain the actual property name")
