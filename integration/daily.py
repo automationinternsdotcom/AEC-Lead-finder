@@ -1,8 +1,8 @@
 """Resumable daily Grok discovery and run-scoped Pipedrive/Warmy ingestion.
 
 Run with the production env and absolute DB_PATH, RESULTS_DIR and
-AETHER_SALES_DB_PATH. --enroll-draft is standing authorization to add each
-ready batch to the configured draft; it never starts a campaign.
+AETHER_SALES_DB_PATH. --enroll-draft is standing authorization to append each
+ready prospect to the configured Warmy list; it never enrolls or starts a campaign.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import os
 import subprocess
 import sys
 import time
-import uuid
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -23,9 +22,7 @@ from .config import Settings
 from .database import Database
 from .handoff import handoff_content_hash, ingest_handoff, load_handoff
 from .history import reconcile_history
-from .models import ApprovalBatch
 from .worker import run_once
-from .workflows import SalesWorkflows
 
 REPO = Path(__file__).resolve().parents[1]
 CHECKPOINT = "daily:grok-pipedrive-warmy:v1"
@@ -62,6 +59,18 @@ def preserve_existing_enrollments(db: Database, handoff):
 
 
 def ingest(settings: Settings, db: Database, path: Path, *, enroll_draft: bool) -> dict:
+    if enroll_draft:
+        list_id = settings.warmy_prospect_list_id.strip()
+        if not list_id:
+            raise RuntimeError(
+                "daily list ingestion requires WARMY_PROSPECT_LIST_ID; "
+                "no prospect list will be guessed"
+            )
+        # List-only ingestion is deliberately independent of send approval and
+        # campaign state. Campaign audience binding is a separate activation
+        # preflight because the documented prospect endpoint does not expose a
+        # campaign's exact audience readback.
+        settings = replace(settings, warmy_list_sync_enabled=True)
     handoff, history_reused = reconcile_history(db, load_handoff(path))
     handoff, preserved = preserve_existing_enrollments(db, handoff)
     handoff = handoff.model_copy(update={"content_hash": handoff_content_hash(handoff)})
@@ -107,37 +116,11 @@ def ingest(settings: Settings, db: Database, path: Path, *, enroll_draft: bool) 
     result["pipedrive_linked"] = len(linked_leads)
     result["warmy_linked"] = len(linked_prospects)
     result["enrolled"] = 0
-    if enroll_draft and ready:
-        fingerprint = json.loads((REPO / "config/daily_campaign_fingerprint.json").read_text())
-        if fingerprint["campaign_id"] != settings.warmy_campaign_id:
-            raise RuntimeError("Daily campaign fingerprint belongs to a different campaign")
-        settings = replace(settings, warmy_campaign_manifest_hash=fingerprint["manifest_hash"])
-        settings = replace(settings, warmy_enrollment_enabled=True, campaign_start_enabled=False)
-        workflows = SalesWorkflows(settings, db)
-        try:
-            settings.require_campaign_enrollment(draft_only=True)
-            campaign = workflows.warmy.get_campaign(settings.warmy_campaign_id)
-            if str((campaign.get("data") or campaign).get("status")) != "draft":
-                raise RuntimeError("Campaign is no longer draft; workspace ingestion completed")
-            campaign_verification = workflows._validate_live_campaign(campaign, for_enrollment=True)
-            result["campaign_verification"] = campaign_verification
-            now = datetime.now(UTC)
-            batch = ApprovalBatch(
-                batch_id=f"daily-{handoff.run_id}-{uuid.uuid4().hex[:12]}",
-                campaign_id=settings.warmy_campaign_id,
-                campaign_manifest_hash=settings.warmy_campaign_manifest_hash,
-                sequence_ids=[s["sequence_id"] for s in ready],
-                merge_hashes={s["sequence_id"]: s["merge_hash"] for s in ready},
-                maximum_recipient_count=len(ready),
-                approved_by="User standing instruction: daily Grok ingestion into Pipedrive and Warmy (2026-09-07)",
-                approved_at=now, expires_at=now + timedelta(hours=24),
-            )
-            db.save_approval_batch(batch)
-            for sequence in ready:
-                workflows.enroll_sequence({"sequence_id": sequence["sequence_id"], "draft_only": True})
-                result["enrolled"] += 1
-        finally:
-            workflows.close()
+    if enroll_draft:
+        result["warmy_list_id"] = settings.warmy_prospect_list_id
+        result["warmy_list_sync"] = "list_only"
+        result["campaign_verification"] = "separate_activation_preflight_required"
+        result["campaign_audience"] = "canonical_list_append_only"
     result["run_id"] = handoff.run_id
     return result
 

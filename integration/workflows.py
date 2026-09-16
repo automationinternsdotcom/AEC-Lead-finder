@@ -99,6 +99,67 @@ class SalesWorkflows:
         if self._pipedrive:
             self._pipedrive.close()
 
+    def _warmy_list_id(self) -> str | None:
+        """Return the configured daily list, failing closed when enabled."""
+        # A configured canonical ID is durable intent: background workers and
+        # retries load it from env too, so a transient CLI flag cannot cause a
+        # successful upsert to lose its list membership on retry.
+        if not self.settings.warmy_list_sync_enabled and not self.settings.warmy_prospect_list_id.strip():
+            return None
+        list_id = self.settings.warmy_prospect_list_id.strip()
+        if not list_id:
+            raise ActivationBlocked("Warmy daily list sync requires WARMY_PROSPECT_LIST_ID")
+        return list_id
+
+    def _append_warmy_list(
+        self,
+        payload: dict[str, Any],
+        list_id: str,
+        prospect_id: str,
+        operation_key: str,
+    ) -> None:
+        self._operation(
+            "warmy",
+            operation_key,
+            {**payload, "list_id": list_id, "enroll": False},
+            lambda: self.warmy.append_prospect_to_list(
+                payload,
+                list_id,
+                f"aether-list-append-{list_id}-{prospect_id}",
+            ),
+        )
+
+    def _warmy_existing_snapshot(
+        self,
+        email: str,
+        known_prospect_id: str,
+        listing: dict[str, Any] | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Return an exact provider snapshot before replacing custom fields."""
+        listing_data = (listing or {}).get("data") or (listing or {})
+        listed_id = str(listing_data.get("id") or "").strip()
+        if known_prospect_id and listed_id and listed_id != known_prospect_id:
+            raise ActivationBlocked("Warmy email lookup returned a different prospect ID")
+        prospect_id = known_prospect_id or listed_id
+        if not prospect_id:
+            return "", listing_data
+        snapshot = listing_data
+        # An omitted field is not an empty field: PATCH replaces the whole
+        # object, so fetch exact detail before risking an overwrite.
+        if "customFields" not in snapshot:
+            detail_response = self.warmy.get_prospect(prospect_id)
+            detail = (detail_response or {}).get("data") or (detail_response or {})
+            if not isinstance(detail, dict):
+                raise ActivationBlocked("Warmy prospect detail is unavailable")
+            if str(detail.get("id") or "").strip() != prospect_id:
+                raise ActivationBlocked("Warmy prospect detail ID differs from mapped prospect")
+            if str(detail.get("email") or "").strip().casefold() != email.strip().casefold():
+                raise ActivationBlocked("Warmy prospect detail email differs from mapped prospect")
+            if "customFields" not in detail:
+                raise ActivationBlocked("Warmy prospect detail omits the full custom-field snapshot")
+            snapshot = detail
+        return prospect_id, snapshot
+
     def handle(self, item: WorkItem) -> None:
         handlers: dict[str, Callable[[dict[str, Any]], None]] = {
             "scout.lead.sync": self.sync_lead_event,
@@ -284,6 +345,7 @@ class SalesWorkflows:
     def sync_sequence(self, payload: dict[str, Any]) -> None:
         sequence = OutreachSequenceSync.model_validate(payload["sequence"])
         recipient = RecipientSync.model_validate(payload["recipient"])
+        list_id = self._warmy_list_id()
         if recipient.recipient_id != sequence.primary_recipient_id:
             raise ValueError("sequence primary recipient payload mismatch")
         guard = inspect_recipient_guard(self.db, recipient.company_id, recipient.email)
@@ -434,9 +496,22 @@ class SalesWorkflows:
             return
 
         prospect_id = str(person_row.get("warmy_prospect_id") or "") if person_row else ""
-        if not prospect_id:
-            existing = self.warmy.find_prospect_by_email(recipient.email)
-            prospect_id = str((existing or {}).get("id") or "")
+        # Preserve the existing email-dedup read for new prospects; list mode
+        # additionally refreshes it when a local mapping already has an ID so
+        # provider-only custom fields survive the full-object upsert.
+        existing = (
+            self.warmy.find_prospect_by_email(recipient.email)
+            if list_id or not prospect_id
+            else None
+        )
+        if list_id:
+            prospect_id, existing_data = self._warmy_existing_snapshot(
+                recipient.email, prospect_id, existing
+            )
+        else:
+            existing_data = (existing or {}).get("data") or (existing or {})
+            if not prospect_id:
+                prospect_id = str(existing_data.get("id") or "")
         warmy_payload = {
             "email": recipient.email,
             "first_name": recipient.first_name,
@@ -450,14 +525,24 @@ class SalesWorkflows:
             "project_property_name": merge_snapshot["projectPropertyName"],
             "unsubscribe_url": unsubscribe_url,
         }
+        if isinstance(existing_data.get("customFields"), dict):
+            warmy_payload["_existing_custom_fields"] = existing_data["customFields"]
         if not prospect_id:
             response = self._operation(
                 "warmy",
                 f"prospect:create:{recipient.email}",
                 warmy_payload,
-                lambda: self.warmy.create_prospect(
-                    warmy_payload,
-                    f"aether-prospect-{recipient.email}",
+                lambda: (
+                    self.warmy.append_prospect_to_list(
+                        warmy_payload,
+                        list_id,
+                        f"aether-list-append-{list_id}-{recipient.email}",
+                    )
+                    if list_id
+                    else self.warmy.create_prospect(
+                        warmy_payload,
+                        f"aether-prospect-{recipient.email}",
+                    )
                 ),
                 reconcile=lambda: self.warmy.find_prospect_by_email(recipient.email),
             )
@@ -475,6 +560,13 @@ class SalesWorkflows:
                 ),
                 reconcile=lambda: self.warmy.find_prospect_by_email(recipient.email),
             )
+            if list_id:
+                self._append_warmy_list(
+                    warmy_payload,
+                    list_id,
+                    prospect_id,
+                    f"prospect:list:{list_id}:{prospect_id}:{merge_hash[:16]}",
+                )
         self.db.update_recipient(
             recipient.recipient_id, warmy_prospect_id=prospect_id
         )
@@ -593,6 +685,7 @@ class SalesWorkflows:
 
     def sync_contact(self, payload: dict[str, Any]) -> None:
         contact = ContactSync.model_validate(payload)
+        list_id = self._warmy_list_id()
         mapping = self.db.get_mapping(outreach_id=contact.outreach_id)
         if mapping is None:
             mapping = MappingRecord(
@@ -765,6 +858,20 @@ class SalesWorkflows:
                     warmy_prospect_id=reusable.warmy_prospect_id,
                 )
                 mapping = self.db.get_mapping(outreach_id=contact.outreach_id)
+        existing = self.warmy.find_prospect_by_email(contact.email) if list_id else None
+        if list_id:
+            provider_prospect_id, existing_data = self._warmy_existing_snapshot(
+                contact.email, str(mapping.warmy_prospect_id or ""), existing
+            )
+        else:
+            provider_prospect_id, existing_data = "", {}
+        if not mapping.warmy_prospect_id and provider_prospect_id:
+            self.db.update_mapping(
+                contact.outreach_id,
+                warmy_prospect_id=provider_prospect_id,
+            )
+            mapping = self.db.get_mapping(outreach_id=contact.outreach_id)
+        existing_custom_fields = existing_data.get("customFields")
         if not mapping.warmy_prospect_id:
             first_name, last_name = _split_name(contact.person_name)
             warmy_payload = contact.model_dump(mode="json") | {
@@ -772,13 +879,23 @@ class SalesWorkflows:
                 "last_name": last_name,
                 "unsubscribe_url": unsubscribe_url,
             }
+            if isinstance(existing_custom_fields, dict):
+                warmy_payload["_existing_custom_fields"] = existing_custom_fields
             response = self._operation(
                 "warmy",
                 f"prospect:create:{contact.email}",
                 warmy_payload,
-                lambda: self.warmy.create_prospect(
-                    warmy_payload,
-                    f"aether-prospect-{contact.email}",
+                lambda: (
+                    self.warmy.append_prospect_to_list(
+                        warmy_payload,
+                        list_id,
+                        f"aether-list-append-{list_id}-{contact.email}",
+                    )
+                    if list_id
+                    else self.warmy.create_prospect(
+                        warmy_payload,
+                        f"aether-prospect-{contact.email}",
+                    )
                 ),
             )
             prospect = response.get("data") or response
@@ -794,6 +911,8 @@ class SalesWorkflows:
                 "last_name": last_name,
                 "unsubscribe_url": unsubscribe_url,
             }
+            if isinstance(existing_custom_fields, dict):
+                warmy_payload["_existing_custom_fields"] = existing_custom_fields
             revision = uuid.uuid5(
                 uuid.NAMESPACE_URL,
                 f"{contact.outreach_id}:{contact.why_line}",
@@ -808,6 +927,13 @@ class SalesWorkflows:
                     f"aether-prospect-update-{mapping.warmy_prospect_id}-{revision}",
                 ),
             )
+            if list_id:
+                self._append_warmy_list(
+                    warmy_payload,
+                    list_id,
+                    mapping.warmy_prospect_id,
+                    f"prospect:list:{list_id}:{mapping.warmy_prospect_id}:{revision}",
+                )
         mapping = self._mapping(contact.outreach_id)
         fields = self._deal_fields(warmy_prospect_id=mapping.warmy_prospect_id)
         if fields:

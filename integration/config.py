@@ -94,6 +94,11 @@ class Settings:
     warmy_base_url: str = "https://warmysender.com/api/v1"
     warmy_campaign_id: str = ""
     warmy_campaign_manifest_hash: str = ""
+    # Canonical prospect list for daily enrichment.  There is deliberately no
+    # default: a missing ID must hold list-only ingestion rather than guessing
+    # from a UI name or attaching contacts to an arbitrary campaign.
+    warmy_prospect_list_id: str = ""
+    warmy_list_sync_enabled: bool = False
     warmy_mailbox_ids: tuple[str, ...] = ()
     warmy_mailbox_emails: dict[str, str] = field(default_factory=dict)
     warmy_daily_limit: int = 150
@@ -162,6 +167,8 @@ class Settings:
             warmy_campaign_manifest_hash=os.environ.get(
                 "WARMY_CAMPAIGN_MANIFEST_HASH", ""
             ).strip(),
+            warmy_prospect_list_id=os.environ.get("WARMY_PROSPECT_LIST_ID", "").strip(),
+            warmy_list_sync_enabled=_flag("WARMY_LIST_SYNC_ENABLED"),
             warmy_mailbox_ids=mailboxes,
             warmy_mailbox_emails=_json_map("WARMY_MAILBOX_EMAILS"),
             warmy_daily_limit=_int("WARMY_DAILY_LIMIT", 150),

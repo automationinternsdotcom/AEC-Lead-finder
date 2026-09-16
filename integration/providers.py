@@ -39,6 +39,7 @@ def validate_provider_prospect(
     expected_id: str,
     expected_email: str,
     initial_step: bool,
+    expected_list_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate Warmy's documented prospect read before a literal start.
 
@@ -69,6 +70,14 @@ def validate_provider_prospect(
         for field in ("lastContactedAt", "last_contacted_at", "lastSentAt", "last_sent_at")
     ):
         raise ActivationBlocked("initial recipient already has provider contact activity; reconcile before retry")
+    if expected_list_id:
+        memberships = prospect.get("listMemberships")
+        if not isinstance(memberships, list) or not any(
+            isinstance(item, dict)
+            and str(item.get("listId") or "").strip() == expected_list_id.strip()
+            for item in memberships
+        ):
+            raise ActivationBlocked("provider prospect is not a member of the canonical list")
     return prospect
 
 
@@ -118,7 +127,13 @@ class WarmyClient:
             )
         return body
 
-    def create_prospect(self, contact: dict[str, Any], operation_key: str) -> dict:
+    def create_prospect(
+        self,
+        contact: dict[str, Any],
+        operation_key: str,
+        *,
+        list_id: str | None = None,
+    ) -> dict:
         custom_fields = self._prospect_custom_fields(contact)
         payload = {
             "email": contact["email"],
@@ -131,6 +146,8 @@ class WarmyClient:
             "enroll": False,
             "customFields": custom_fields,
         }
+        if list_id:
+            payload["listId"] = list_id
         payload = {
             key: value for key, value in payload.items() if value not in ("", None)
         }
@@ -141,6 +158,47 @@ class WarmyClient:
             idempotency_key=operation_key,
             write=True,
         )
+
+    def append_prospect_to_list(
+        self,
+        contact: dict[str, Any],
+        list_id: str,
+        operation_key: str,
+    ) -> dict:
+        """Idempotently upsert a prospect and attach it to one known list.
+
+        Warmy's documented ``POST /prospects`` operation reuses an existing
+        prospect by email and accepts ``listId``.  ``enroll:false`` remains in
+        the payload so this operation only changes list membership; it never
+        directly enrolls or starts a campaign.  Require the documented
+        attachment acknowledgement instead of claiming success from an ID
+        alone.
+        """
+        normalized_list_id = str(list_id or "").strip()
+        if not normalized_list_id:
+            raise ActivationBlocked("Warmy canonical prospect list ID is required")
+        response = self.create_prospect(
+            contact,
+            operation_key,
+            list_id=normalized_list_id,
+        )
+        data = response.get("data", response) if isinstance(response, dict) else None
+        # The documented response places list/listId at the root. Accept a
+        # nested shape only as a compatibility fallback, never as inference.
+        attached = response.get("list") if isinstance(response, dict) else None
+        if attached is None and isinstance(data, dict):
+            attached = data.get("list")
+        if not isinstance(attached, dict) or attached.get("attached") is not True:
+            raise ActivationBlocked("Warmy list append lacks an explicit attachment acknowledgement")
+        echoed_list_id = response.get("listId") if isinstance(response, dict) else None
+        if echoed_list_id is None and isinstance(data, dict):
+            echoed_list_id = data.get("listId")
+        if echoed_list_id != normalized_list_id:
+            raise ActivationBlocked(
+                f"Warmy list acknowledgement mismatch: expected {normalized_list_id}, "
+                f"got {echoed_list_id or '<missing>'}"
+            )
+        return response
 
     def find_prospect_by_email(self, email: str) -> dict[str, Any] | None:
         normalized = email.strip().casefold()
@@ -170,6 +228,7 @@ class WarmyClient:
 
     @staticmethod
     def _prospect_custom_fields(contact: dict[str, Any]) -> dict[str, Any]:
+        existing = contact.get("_existing_custom_fields")
         values = {
             "aetherLeadEventId": contact.get("lead_event_id", ""),
             "aetherOutreachId": contact.get("outreach_id", ""),
@@ -181,7 +240,9 @@ class WarmyClient:
             "whyLine": review_copy(contact.get("why_line", "")),
             "projectPropertyName": contact.get("project_property_name", ""),
         }
-        return {key: value for key, value in values.items() if value not in ("", None)}
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        merged.update({key: value for key, value in values.items() if value not in ("", None)})
+        return merged
 
     def update_prospect(
         self, prospect_id: str, contact: dict[str, Any], operation_key: str
@@ -344,6 +405,7 @@ class WarmyClient:
             expected_id=provider_prospect_id,
             expected_email=str(messages[0].get("recipient_email") or ""),
             initial_step=int(messages[0].get("step_index") or 0) == 0,
+            expected_list_id=self.settings.warmy_prospect_list_id,
         )
         validate_live_literal_campaign(
             current,

@@ -291,7 +291,9 @@ def test_database_persists_and_binds_the_frozen_approval_to_recipient(tmp_path):
             render_manifest=manifest,
         )
     )
-    assert db.valid_frozen_send_approval("campaign-1", "campaign-hash")["status"] == "verified"
+    assert db.valid_frozen_send_approval(
+        "campaign-1", "campaign-hash", now=now
+    )["status"] == "verified"
     assert not db.valid_approval_for_sequence(
         "sequence-1",
         campaign_id="campaign-1",

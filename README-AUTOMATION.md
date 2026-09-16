@@ -9,14 +9,49 @@ run, so an interrupted run resumes and missed dates are covered. Each new window
 overlaps the checkpoint by two days to catch late articles.
 
 `integration.daily` validates the typed handoff, syncs Pipedrive events and people,
-creates/updates Warmy contacts with the sourced why-lines, then approves the exact
-ready merge hashes and enrolls them into the configured **draft** campaign. It
+creates/updates Warmy contacts with the sourced why-lines, then (when explicitly
+requested) appends them to the configured canonical Warmy prospect list. This
+list-only operation does not approve, enroll, or start a campaign. It
 uses Grok to confirm same-company/same-project matches against prior CRM events
 and reuses their original Lead IDs. Uncertain matches stay eligible as new events.
 The match inputs and decisions are cached in the sales DB for audit and retries. It
 preserves existing enrolled/replied sequences and their recipient data. Draft
 ingestion does not require Pipedrive reply automations to be live; live campaign
 activation retains every existing activation requirement.
+
+### Canonical Warmy list collection
+
+Set `WARMY_PROSPECT_LIST_ID` to the stable list ID obtained from an operator-reviewed
+Warmy configuration and set `WARMY_LIST_SYNC_ENABLED=true` in every worker
+environment. With `--enroll-draft`, each successfully upserted prospect is
+sent through the documented `POST /api/v1/prospects` list route with `listId` and
+`enroll:false`; the provider's explicit `list.attached:true` acknowledgement and
+matching `listId` are required. The operation is idempotent by email and sends no
+email, enrolls no sequence step, and does not start or resume a campaign. The full
+custom-field snapshot is included on both new and existing-prospect upserts so an
+existing contact's source and personalization fields are not silently unset.
+
+List collection does not use campaign approval or campaign status as its gate. A
+separate activation preflight must verify that the intended campaign is paused or
+draft and is list-only. At activation, the fresh provider prospect read must show
+the configured canonical list in `listMemberships`; exact campaign membership still
+requires the existing audited Warmy UI attestation because the campaign readback
+does not expose a supported exact-audience contract. If either read is unavailable,
+activation remains held. Do not infer campaign membership from a local list ID or a
+successful prospect upsert.
+
+Operationally, provide the reviewed ID only for the list-collection run:
+
+```bash
+WARMY_PROSPECT_LIST_ID=<reviewed-list-id> WARMY_LIST_SYNC_ENABLED=true \
+  uv run python -m integration.daily --enroll-draft \
+  --handoff /absolute/path/to/sales_handoff.json
+```
+
+Keep `WARMY_ENROLLMENT_ENABLED=false` and `CAMPAIGN_START_ENABLED=false` for this
+run. A later activation command must perform its own provider/UI audience
+attestation and send-gate checks; this ingestion command cannot authorize that
+activation.
 
 Treg budget/provider deferrals create durable `treg_enrichment_deferred` reviews;
 they do not abort export or ingestion of contacts already found. Completed Grok
