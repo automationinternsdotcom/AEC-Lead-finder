@@ -53,6 +53,7 @@ Comparison delivery remains a separate exactly-once Gmail command.
 - Apollo.io API key if you want Apollo fallback enrichment
 - MapsData API key or CSV export if you want MapsData lead ingestion
 - Operator-reviewed Costar tenant CSV export if you want Costar tenant context
+- MapsData or WarmySender CSV export if you want to seed the raw lead queue
 
 ## Configuration
 
@@ -119,6 +120,25 @@ Install dependencies:
 ```bash
 uv sync
 ```
+
+### Raw lead intake before Grok
+
+Use `scout.raw_leads` when a provider export should be collected first and
+enriched later. It accepts repeated `NAME=CSV` inputs for MapsData, WarmySender,
+Sales Navigator, Costar, or another CSV-shaped source. The importer preserves the
+original row JSON, merges stable matches by LinkedIn URL or email, and does not
+qualify, verify, enrich, or send anything.
+
+```bash
+uv run python -m scout.raw_leads \
+  --source mapsdata=/secure/exports/mapsdata-arizona.csv \
+  --source warmysender=/secure/exports/warmysender-aec.csv \
+  --source sales_navigator=/secure/exports/sales-nav-aec.csv \
+  --output results/raw-leads/$(date +%F)/raw_leads.csv
+```
+
+The output is intentionally git-ignored and marked `raw_pending_grok`. Review the
+manifest and pass the normalized CSV to the later Grok enrichment job when ready.
 
 Run the full pipeline without Apollo spending:
 

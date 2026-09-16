@@ -72,6 +72,22 @@ CSV exports only; it does not start new MapsData scrapes during the nightly run.
 Costar rows must be operator-reviewed tenant exports, not browser-scraped session
 data. Imported rows are preserved under the run's raw artifacts before qualification.
 
+For a larger batch that should wait for a later Grok pass, use the separate raw
+intake queue. WarmySender lead-database exports are supported in the same command
+as MapsData, Sales Navigator, and Costar exports. This keeps provider collection
+separate from qualification and never enrolls or sends records:
+
+```bash
+uv run python -m scout.raw_leads \
+  --source mapsdata=/secure/exports/mapsdata-arizona.csv \
+  --source warmysender=/secure/exports/warmysender-aec.csv \
+  --output results/raw-leads/$(date +%F)/raw_leads.csv
+```
+
+Keep exports in a runtime-only directory outside git. The OpenClaw machine should
+run this command after an operator downloads the completed exports, then leave the
+queue at `raw_pending_grok` until the approved enrichment run is scheduled.
+
 The reviewed existing draft fingerprint is pinned in
 `config/daily_campaign_fingerprint.json`; template/settings drift stops enrollment
 until the change is reviewed. This daily pin does not alter the production sending
