@@ -69,6 +69,20 @@ def test_append_prospect_to_list_requires_provider_attachment_acknowledgement():
         client.close()
 
 
+def test_append_prospect_to_list_rejects_attached_without_matching_list_id():
+    client = _client(
+        lambda request: httpx.Response(
+            200,
+            json={"data": {"id": "prospect-1"}, "list": {"attached": True}},
+        )
+    )
+    try:
+        with pytest.raises(ActivationBlocked, match="attachment acknowledgement"):
+            client.append_prospect_to_list(CONTACT, "list-article-leads", "append-1")
+    finally:
+        client.close()
+
+
 def test_append_prospect_to_list_rejects_mismatched_list_acknowledgement():
     client = _client(
         lambda request: httpx.Response(

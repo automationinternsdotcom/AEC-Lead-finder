@@ -395,6 +395,9 @@ class WarmyClient:
         attached = response.get("list") if isinstance(response, dict) else None
         if attached is None and isinstance(data, dict):
             attached = data.get("list")
+        echoed_list_id = response.get("listId") if isinstance(response, dict) else None
+        if echoed_list_id is None and isinstance(data, dict):
+            echoed_list_id = data.get("listId")
         mcp_membership_ack = isinstance(data, dict) and any(
             isinstance(item, dict)
             and normalized_list_id in {
@@ -403,16 +406,18 @@ class WarmyClient:
             }
             for item in (data.get("listMemberships") or [])
         )
-        if (not isinstance(attached, dict) or attached.get("attached") is not True) and not mcp_membership_ack:
-            raise ActivationBlocked("Warmy list append lacks an explicit attachment acknowledgement")
-        echoed_list_id = response.get("listId") if isinstance(response, dict) else None
-        if echoed_list_id is None and isinstance(data, dict):
-            echoed_list_id = data.get("listId")
+        explicit_list_ack = (
+            isinstance(attached, dict)
+            and attached.get("attached") is True
+            and echoed_list_id == normalized_list_id
+        )
         if echoed_list_id is not None and echoed_list_id != normalized_list_id:
             raise ActivationBlocked(
                 f"Warmy list acknowledgement mismatch: expected {normalized_list_id}, "
                 f"got {echoed_list_id or '<missing>'}"
             )
+        if not explicit_list_ack and not mcp_membership_ack:
+            raise ActivationBlocked("Warmy list append lacks an explicit attachment acknowledgement")
         return response
 
     def find_prospect_by_email(self, email: str) -> dict[str, Any] | None:
