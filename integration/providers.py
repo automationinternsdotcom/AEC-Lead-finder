@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import selectors
+import subprocess
 import time
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -31,6 +34,148 @@ class ProviderError(RuntimeError):
 
 class GmailHistoryExpired(RuntimeError):
     """The Gmail history cursor aged out and requires a bounded resync."""
+
+
+class WarmyMcpClient:
+    """Small stdio MCP client for the documented WarmySender launcher.
+
+    ``@warmysender/mcp`` is an official launcher around ``mcp-remote``.  It
+    speaks newline-delimited JSON-RPC on stdin/stdout, so the worker can use
+    the same authenticated MCP surface as the interactive connector without
+    depending on a Codex tool session or browser state.
+    """
+
+    PROTOCOL_VERSION = "2025-06-18"
+    # Verified official launcher release; avoid silently changing the
+    # transport contract on a future npm publish.
+    LAUNCHER_PACKAGE = "@warmysender/mcp@1.0.2"
+    MAX_PAGES = 1000
+
+    def __init__(self, settings: Settings):
+        if not settings.warmy_api_key:
+            raise ActivationBlocked("Warmy MCP requires WARMY_API_KEY")
+        env = os.environ.copy()
+        # The launcher documents this environment variable. Do not put the
+        # credential in argv, logs, or a persisted artifact.
+        env["WARMYSENDER_API_KEY"] = settings.warmy_api_key
+        env["WARMYSENDER_MCP_URL"] = settings.warmy_mcp_url
+        try:
+            self.process = subprocess.Popen(
+                ["npx", "-y", self.LAUNCHER_PACKAGE],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                # Keep launcher diagnostics away from the protocol stream and
+                # avoid filling an unread stderr pipe during a long run.
+                stderr=subprocess.DEVNULL,
+                text=False,
+                env=env,
+                bufsize=0,
+            )
+        except OSError as error:
+            raise ProviderError("warmy-mcp", 503, "mcp_unavailable", "official launcher could not start") from error
+        self.timeout = 30.0
+        self._selector = selectors.DefaultSelector()
+        if self.process.stdout is None or self.process.stdin is None:
+            self.close()
+            raise ProviderError("warmy-mcp", 503, "mcp_unavailable", "official launcher has no stdio transport")
+        self._selector.register(self.process.stdout, selectors.EVENT_READ)
+        self._stdout_buffer = bytearray()
+        self._next_id = 0
+        try:
+            self._request(
+                "initialize",
+                {
+                    "protocolVersion": self.PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "aether-background-worker", "version": "1"},
+                },
+            )
+            self._notify("notifications/initialized", {})
+        except Exception:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        selector = getattr(self, "_selector", None)
+        process = getattr(self, "process", None)
+        if selector is not None:
+            selector.close()
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+    def _notify(self, method: str, params: dict[str, Any]) -> None:
+        if self.process.stdin is None:
+            raise ProviderError("warmy-mcp", 503, "mcp_unavailable", "MCP stdin closed")
+        self.process.stdin.write((json.dumps({"jsonrpc": "2.0", "method": method, "params": params}) + "\n").encode())
+        self.process.stdin.flush()
+
+    def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if self.process.stdin is None:
+            raise ProviderError("warmy-mcp", 503, "mcp_unavailable", "MCP stdin closed")
+        self._next_id += 1
+        request_id = self._next_id
+        self.process.stdin.write((json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n").encode())
+        self.process.stdin.flush()
+        deadline = time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if b"\n" not in self._stdout_buffer and (remaining <= 0 or not self._selector.select(remaining)):
+                raise ProviderError("warmy-mcp", 503, "mcp_timeout", f"MCP {method} timed out")
+            if b"\n" in self._stdout_buffer:
+                line, _, self._stdout_buffer = self._stdout_buffer.partition(b"\n")
+            else:
+                fd = self.process.stdout.fileno() if self.process.stdout else -1
+                chunk = os.read(fd, 4096) if fd >= 0 else b""
+                if not chunk:
+                    raise ProviderError("warmy-mcp", 503, "mcp_unavailable", f"MCP closed during {method}")
+                self._stdout_buffer.extend(chunk)
+                if len(self._stdout_buffer) > 1_000_000:
+                    raise ProviderError("warmy-mcp", 503, "mcp_invalid_response", f"MCP {method} response exceeded buffer limit")
+                continue
+            try:
+                response = json.loads(line.decode())
+            except json.JSONDecodeError:
+                # mcp-remote must keep stdout protocol-clean, but ignore an
+                # incidental non-JSON line rather than treating it as a reply.
+                continue
+            if response.get("id") != request_id:
+                continue
+            if response.get("error"):
+                error = response["error"]
+                message = str(error.get("message") or "MCP request failed") if isinstance(error, dict) else "MCP request failed"
+                raise ProviderError("warmy-mcp", 503, "mcp_tool_error", message)
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise ProviderError("warmy-mcp", 503, "mcp_invalid_response", f"MCP {method} returned no result")
+            return result
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = self._request("tools/call", {"name": name, "arguments": arguments})
+        if result.get("isError") is True:
+            text = next(
+                (item.get("text") for item in result.get("content", [])
+                 if isinstance(item, dict) and isinstance(item.get("text"), str)),
+                "MCP tool failed",
+            )
+            raise ProviderError("warmy-mcp", 503, "mcp_tool_error", text)
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict):
+            return structured
+        for item in result.get("content", []):
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            try:
+                value = json.loads(item.get("text", ""))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict):
+                return value
+        raise ProviderError("warmy-mcp", 503, "mcp_invalid_response", f"MCP tool {name} returned no object")
 
 
 def validate_provider_prospect(
@@ -87,8 +232,10 @@ def validate_provider_prospect(
 
 
 class WarmyClient:
+    MAX_PROSPECT_PAGES = 1000
     def __init__(self, settings: Settings, transport: httpx.Client | None = None):
         self.settings = settings
+        self.mcp: WarmyMcpClient | None = None
         self.http = transport or httpx.Client(
             base_url=settings.warmy_base_url + "/",
             timeout=30,
@@ -99,7 +246,16 @@ class WarmyClient:
         )
 
     def close(self) -> None:
+        if self.mcp:
+            self.mcp.close()
         self.http.close()
+
+    def _mcp_client(self) -> WarmyMcpClient | None:
+        if not self.settings.warmy_mcp_enabled:
+            return None
+        if self.mcp is None:
+            self.mcp = WarmyMcpClient(self.settings)
+        return self.mcp
 
     def _request(
         self,
@@ -139,6 +295,27 @@ class WarmyClient:
         *,
         list_id: str | None = None,
     ) -> dict:
+        self.settings.require_provider_writes()
+        mcp = self._mcp_client()
+        if mcp:
+            arguments: dict[str, Any] = {
+                "email": contact["email"],
+                "first_name": contact.get("first_name", ""),
+                "last_name": contact.get("last_name", ""),
+                "company": contact.get("organization_name", ""),
+                "role": contact.get("title", ""),
+                "phone": contact.get("phone", ""),
+                "linkedin_url": contact.get("linkedin", ""),
+                "enroll": False,
+                "custom_fields": self._prospect_custom_fields(contact),
+                "idempotency_key": operation_key,
+            }
+            if list_id:
+                arguments["list_id"] = list_id
+            return mcp.call_tool("create_prospect", {
+                key: value for key, value in arguments.items()
+                if value not in ("", None)
+            })
         custom_fields = self._prospect_custom_fields(contact)
         payload = {
             "email": contact["email"],
@@ -182,23 +359,56 @@ class WarmyClient:
         normalized_list_id = str(list_id or "").strip()
         if not normalized_list_id:
             raise ActivationBlocked("Warmy canonical prospect list ID is required")
-        response = self.create_prospect(
-            contact,
-            operation_key,
-            list_id=normalized_list_id,
-        )
+        self.settings.require_provider_writes()
+        mcp = self._mcp_client()
+        if mcp:
+            # This is intentionally a membership-only upsert. A follow-up
+            # update_prospect call carries the complete custom-field snapshot
+            # only when the workflow has new content to sync.
+            response = mcp.call_tool(
+                "create_prospect",
+                {
+                    "email": contact["email"],
+                    "list_id": normalized_list_id,
+                    "enroll": False,
+                    "idempotency_key": operation_key,
+                },
+            )
+        else:
+            # REST fallback is also membership-only. Never reuse the full
+            # prospect create payload here: that can overwrite existing
+            # provider fields while all we need is list attachment.
+            response = self._request(
+                "POST",
+                "prospects",
+                payload={
+                    "email": contact["email"],
+                    "listId": normalized_list_id,
+                    "enroll": False,
+                },
+                idempotency_key=operation_key,
+                write=True,
+            )
         data = response.get("data", response) if isinstance(response, dict) else None
         # The documented response places list/listId at the root. Accept a
         # nested shape only as a compatibility fallback, never as inference.
         attached = response.get("list") if isinstance(response, dict) else None
         if attached is None and isinstance(data, dict):
             attached = data.get("list")
-        if not isinstance(attached, dict) or attached.get("attached") is not True:
+        mcp_membership_ack = isinstance(data, dict) and any(
+            isinstance(item, dict)
+            and normalized_list_id in {
+                str(item.get("id") or "").strip(),
+                str(item.get("listId") or "").strip(),
+            }
+            for item in (data.get("listMemberships") or [])
+        )
+        if (not isinstance(attached, dict) or attached.get("attached") is not True) and not mcp_membership_ack:
             raise ActivationBlocked("Warmy list append lacks an explicit attachment acknowledgement")
         echoed_list_id = response.get("listId") if isinstance(response, dict) else None
         if echoed_list_id is None and isinstance(data, dict):
             echoed_list_id = data.get("listId")
-        if echoed_list_id != normalized_list_id:
+        if echoed_list_id is not None and echoed_list_id != normalized_list_id:
             raise ActivationBlocked(
                 f"Warmy list acknowledgement mismatch: expected {normalized_list_id}, "
                 f"got {echoed_list_id or '<missing>'}"
@@ -207,29 +417,89 @@ class WarmyClient:
 
     def find_prospect_by_email(self, email: str) -> dict[str, Any] | None:
         normalized = email.strip().casefold()
-        response = self._request(
-            "GET", "prospects", params={"email": normalized}
-        )
-        data = response.get("data") if isinstance(response, dict) else response
-        if isinstance(data, dict):
-            rows = next(
-                (
-                    data[key]
-                    for key in ("prospects", "items", "results")
-                    if isinstance(data.get(key), list)
-                ),
-                [],
+        mcp = self._mcp_client()
+        if mcp:
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            for page_number in range(1, self.MAX_PROSPECT_PAGES + 1):
+                arguments: dict[str, Any] = {
+                    "filters": [{"field": "email", "op": "eq", "value": normalized}],
+                    "limit": 100,
+                }
+                if cursor:
+                    arguments["cursor"] = cursor
+                response = mcp.call_tool("list_prospects", arguments)
+                rows, pagination = self._prospect_page(response, source="MCP")
+                match = next(
+                    (row for row in rows
+                     if str(row.get("email") or "").strip().casefold() == normalized),
+                    None,
+                )
+                if match is not None:
+                    return match
+                has_more = pagination["has_more"]
+                next_cursor = pagination.get("next_cursor", pagination.get("nextCursor"))
+                next_cursor = str(next_cursor or "").strip()
+                if not has_more:
+                    return None
+                if not next_cursor or next_cursor in seen_cursors:
+                    raise ActivationBlocked("Warmy MCP email lookup pagination repeated or omitted its cursor; hold, do not create")
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            raise ActivationBlocked("Warmy MCP email lookup exceeded its maximum page guard; hold, do not create")
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for page_number in range(1, self.MAX_PROSPECT_PAGES + 1):
+            params: dict[str, Any] = {"email": normalized, "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            response = self._request("GET", "prospects", params=params)
+            rows, pagination = self._prospect_page(response, source="REST")
+            match = next(
+                (row for row in rows
+                 if str(row.get("email") or "").strip().casefold() == normalized),
+                None,
             )
+            if match is not None:
+                return match
+            if not pagination["has_more"]:
+                return None
+            next_cursor = str(pagination["next_cursor"] or "").strip()
+            if next_cursor in seen_cursors:
+                raise ActivationBlocked("Warmy REST email lookup pagination repeated its cursor; hold, do not create")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        raise ActivationBlocked("Warmy REST email lookup exceeded its maximum page guard; hold, do not create")
+
+    @staticmethod
+    def _prospect_page(
+        response: dict[str, Any], *, source: str
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Normalize and validate a documented cursor-paginated page.
+
+        Missing pagination is not evidence that a searched email is absent;
+        fail closed so callers hold the contact instead of creating a duplicate.
+        """
+        if not isinstance(response, dict):
+            raise ActivationBlocked(f"Warmy {source} prospect lookup returned an unrecognized page; hold, do not create")
+        data: Any = response.get("data", response) if isinstance(response, dict) else response
+        pagination: Any = response.get("pagination", {}) if isinstance(response, dict) else {}
+        if isinstance(data, dict):
+            pagination = data.get("pagination", pagination)
+            rows = next((data[key] for key in ("prospects", "items", "results", "data")
+                         if isinstance(data.get(key), list)), None)
         else:
             rows = data if isinstance(data, list) else []
-        return next(
-            (
-                row
-                for row in rows
-                if str(row.get("email") or "").strip().casefold() == normalized
-            ),
-            None,
-        )
+        if rows is None or not isinstance(pagination, dict):
+            raise ActivationBlocked(f"Warmy {source} prospect lookup returned an unrecognized page; hold, do not create")
+        has_more = pagination.get("has_more", pagination.get("hasMore"))
+        if not isinstance(has_more, bool):
+            raise ActivationBlocked(f"Warmy {source} prospect lookup omitted valid pagination; hold, do not create")
+        next_cursor = pagination.get("next_cursor", pagination.get("nextCursor"))
+        if has_more and not str(next_cursor or "").strip():
+            raise ActivationBlocked(f"Warmy {source} prospect lookup omitted its next cursor; hold, do not create")
+        pagination = {"has_more": has_more, "next_cursor": next_cursor}
+        return ([row for row in rows if isinstance(row, dict)], pagination)
 
     @staticmethod
     def _prospect_custom_fields(contact: dict[str, Any]) -> dict[str, Any]:
@@ -257,6 +527,24 @@ class WarmyClient:
         Warmy replaces the entire customFields object on PATCH. Callers making
         targeted corrections must preserve the existing full field dictionary.
         """
+        self.settings.require_provider_writes()
+        mcp = self._mcp_client()
+        if mcp:
+            arguments: dict[str, Any] = {
+                "prospect_id": prospect_id,
+                "first_name": contact.get("first_name", ""),
+                "last_name": contact.get("last_name", ""),
+                "company": contact.get("organization_name", ""),
+                "role": contact.get("title", ""),
+                "phone": contact.get("phone", ""),
+                "linkedin_url": contact.get("linkedin") or None,
+                "custom_fields": self._prospect_custom_fields(contact),
+                "idempotency_key": operation_key,
+            }
+            return mcp.call_tool("update_prospect", {
+                key: value for key, value in arguments.items()
+                if value not in ("", None)
+            })
         payload = {
             "firstName": contact.get("first_name", ""),
             "lastName": contact.get("last_name", ""),
@@ -315,7 +603,12 @@ class WarmyClient:
 
     def get_prospect(self, prospect_id: str) -> dict:
         """Read the provider prospect immediately before activation."""
-        return self._request("GET", f"prospects/{prospect_id}")
+        mcp = self._mcp_client()
+        if mcp:
+            return mcp.call_tool("get_prospect", {"prospect_id": prospect_id})
+        # Warmy does not document/support GET /prospects/{id} on the REST API;
+        # never issue that known-invalid request as a pretend fallback.
+        raise ActivationBlocked("Warmy prospect detail requires the documented MCP get_prospect tool")
 
     def enroll(
         self, campaign_id: str, prospect_ids: list[str], operation_key: str

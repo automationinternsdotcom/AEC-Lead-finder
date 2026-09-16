@@ -532,22 +532,23 @@ class SalesWorkflows:
                 "warmy",
                 f"prospect:create:{recipient.email}",
                 warmy_payload,
-                lambda: (
-                    self.warmy.append_prospect_to_list(
-                        warmy_payload,
-                        list_id,
-                        f"aether-list-append-{list_id}-{recipient.email}",
-                    )
-                    if list_id
-                    else self.warmy.create_prospect(
-                        warmy_payload,
-                        f"aether-prospect-{recipient.email}",
-                    )
+                # Create/upsert the complete enriched contact first. List
+                # attachment is a separate membership-only operation below.
+                lambda: self.warmy.create_prospect(
+                    warmy_payload,
+                    f"aether-prospect-{recipient.email}",
                 ),
                 reconcile=lambda: self.warmy.find_prospect_by_email(recipient.email),
             )
             prospect = response.get("data") or response
             prospect_id = str(prospect["id"])
+            if list_id:
+                self._append_warmy_list(
+                    warmy_payload,
+                    list_id,
+                    prospect_id,
+                    f"prospect:list:{list_id}:{prospect_id}:create",
+                )
         else:
             self._operation(
                 "warmy",
@@ -885,17 +886,11 @@ class SalesWorkflows:
                 "warmy",
                 f"prospect:create:{contact.email}",
                 warmy_payload,
-                lambda: (
-                    self.warmy.append_prospect_to_list(
-                        warmy_payload,
-                        list_id,
-                        f"aether-list-append-{list_id}-{contact.email}",
-                    )
-                    if list_id
-                    else self.warmy.create_prospect(
-                        warmy_payload,
-                        f"aether-prospect-{contact.email}",
-                    )
+                # Preserve full enrichment on creation, then attach the
+                # canonical list with a separate minimal upsert.
+                lambda: self.warmy.create_prospect(
+                    warmy_payload,
+                    f"aether-prospect-{contact.email}",
                 ),
             )
             prospect = response.get("data") or response
@@ -904,6 +899,13 @@ class SalesWorkflows:
                 contact.outreach_id,
                 warmy_prospect_id=prospect_id,
             )
+            if list_id:
+                self._append_warmy_list(
+                    warmy_payload,
+                    list_id,
+                    prospect_id,
+                    f"prospect:list:{list_id}:{prospect_id}:create",
+                )
         else:
             first_name, last_name = _split_name(contact.person_name)
             warmy_payload = contact.model_dump(mode="json") | {

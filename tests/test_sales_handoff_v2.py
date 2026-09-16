@@ -178,6 +178,7 @@ class FakeWarmy:
     def __init__(self, verification="valid", campaign=None):
         self.verification = verification
         self.calls = []
+        self.created_payloads = []
         self.campaign = campaign or {}
 
     def verify_email(self, email, operation_key):
@@ -190,7 +191,16 @@ class FakeWarmy:
 
     def create_prospect(self, payload, operation_key):
         self.calls.append(("create", payload["email"]))
+        self.created_payloads.append(payload)
         return {"data": {"id": "prospect-1"}}
+
+    def append_prospect_to_list(self, payload, list_id, operation_key):
+        self.calls.append(("append", payload["email"], list_id))
+        return {
+            "data": {"id": "prospect-1"},
+            "listId": list_id,
+            "list": {"attached": True},
+        }
 
     def update_prospect(self, prospect_id, payload, operation_key):
         self.calls.append(("update", payload["email"]))
@@ -205,6 +215,34 @@ class FakeWarmy:
 
     def close(self):
         pass
+
+
+def test_new_sequence_list_sync_creates_full_contact_then_attaches_membership(tmp_path):
+    db = Database(tmp_path / "sales.sqlite")
+    _seed(db)
+    warmy = FakeWarmy()
+    workflows = SalesWorkflows(
+        Settings(
+            provider_writes_enabled=True,
+            public_base_url="https://sales.example.com",
+            unsubscribe_secret="secret",
+            warmy_prospect_list_id="list-article-leads",
+        ),
+        db,
+        warmy=warmy,
+        pipedrive=FakePipedrive(),
+    )
+    workflows.sync_sequence({
+        "sequence": _sequence().model_dump(mode="json"),
+        "recipient": _recipient().model_dump(mode="json"),
+    })
+    assert warmy.calls[-2:] == [
+        ("create", "jane@acme.example"),
+        ("append", "jane@acme.example", "list-article-leads"),
+    ]
+    created = warmy.created_payloads[0]
+    assert created["why_line"] == _sequence().personalized_why_line
+    assert created["project_property_name"] == "Acme Marketplace"
 
 
 class FakeGmail:

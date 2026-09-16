@@ -92,6 +92,11 @@ class Settings:
     warmy_api_key: str = ""
     warmy_webhook_secret: str = ""
     warmy_base_url: str = "https://warmysender.com/api/v1"
+    # The official launcher is the background-safe MCP transport.  Keep this
+    # separate from the REST base URL: Warmy documents MCP at /mcp, while the
+    # prospect-detail REST route is not available on the production service.
+    warmy_mcp_enabled: bool = False
+    warmy_mcp_url: str = "https://warmysender.com/mcp"
     warmy_campaign_id: str = ""
     warmy_campaign_manifest_hash: str = ""
     # Canonical prospect list for daily enrichment.  There is deliberately no
@@ -162,6 +167,13 @@ class Settings:
             warmy_webhook_secret=os.environ.get("WARMY_WEBHOOK_SECRET", ""),
             warmy_base_url=os.environ.get(
                 "WARMY_BASE_URL", "https://warmysender.com/api/v1"
+            ).rstrip("/"),
+            # Production background workers use the documented official MCP
+            # launcher by default. Tests and explicit callers can opt out and
+            # continue using an injected REST transport.
+            warmy_mcp_enabled=_flag("WARMY_MCP_ENABLED", True),
+            warmy_mcp_url=os.environ.get(
+                "WARMYSENDER_MCP_URL", "https://warmysender.com/mcp"
             ).rstrip("/"),
             warmy_campaign_id=os.environ.get("WARMY_CAMPAIGN_ID", ""),
             warmy_campaign_manifest_hash=os.environ.get(
