@@ -80,6 +80,7 @@ APIFY_TIMEOUT_SECONDS=300
 MAPSDATA_KEY=
 MAPSDATA_CSV=
 MAPSDATA_JOB_ID=
+SALES_NAVIGATOR_CSV=
 COSTAR_TENANT_CSV=
 ```
 
@@ -191,6 +192,7 @@ scoring, and sales handoff path:
 
 ```bash
 MAPSDATA_CSV=/secure/exports/mapsdata-phoenix.csv uv run scout/pipeline.py --mapsdata
+SALES_NAVIGATOR_CSV=/secure/exports/sales-nav-aec.csv uv run scout/pipeline.py --sales-navigator
 COSTAR_TENANT_CSV=/secure/exports/costar-tenants.csv uv run scout/pipeline.py --costar
 uv run scout/pipeline.py --mapsdata --costar
 ```
@@ -365,6 +367,14 @@ fingerprint after any approved live change; merging code does not deploy templat
 See [variant verification](docs/campaign-variant-verification.md) for the full
 approval hash and source-backed observation workflow. Missing A/B read capability
 does not exclude contacts from inert drafts, but must not be reported as verified.
+
+MapsData and Sales Navigator prospects use the separate
+`config/aether_maps_sales_campaign.yaml` manifest and
+`WARMY_MAPS_SALES_CAMPAIGN_ID` / `WARMY_MAPS_SALES_CAMPAIGN_MANIFEST_HASH`
+settings. Their source identity is carried through the typed handoff, so an
+imported prospect cannot be approved against the article campaign by accident.
+Create and verify this campaign as a draft first; starting it still requires the
+same frozen-recipient send gate.
 
 For other draft/paused campaigns without separately managed variants, after changing
 `config/aether_campaign.yaml`, patch the configured draft or paused campaign and

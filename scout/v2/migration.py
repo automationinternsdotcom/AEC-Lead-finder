@@ -301,6 +301,7 @@ class LegacyMigrator:
             lead_event_id=eid,
             run_id=run_id,
             organization_id=oid,
+            source_provider=candidate.provider,
             primary_candidate_id=candidate.candidate_id,
             supporting_candidate_ids=[candidate.candidate_id],
             event=event_text,

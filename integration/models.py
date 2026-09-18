@@ -118,6 +118,7 @@ class LeadEventSync(BaseModel):
     run_id: str = Field(min_length=1)
     lead_event_id: str = Field(min_length=1)
     company_id: str = Field(min_length=1)
+    source_provider: str = ""
     organization_name: str = Field(min_length=1)
     event_role: EventRole
     event: str = Field(min_length=1)
@@ -173,6 +174,7 @@ class OutreachSequenceSync(BaseModel):
     sequence_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     company_id: str = Field(min_length=1)
+    source_provider: str = ""
     campaign_protocol: str = Field(min_length=1)
     anchor_lead_event_id: str = Field(min_length=1)
     supporting_event_ids: list[str] = Field(default_factory=list)

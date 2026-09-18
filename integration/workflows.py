@@ -111,6 +111,17 @@ class SalesWorkflows:
             raise ActivationBlocked("Warmy daily list sync requires WARMY_PROSPECT_LIST_ID")
         return list_id
 
+    def _warmy_campaign(self, source_provider: str = "") -> tuple[str, str]:
+        campaign_id, manifest_hash = self.settings.warmy_campaign_for_source(
+            source_provider
+        )
+        if not campaign_id or not manifest_hash:
+            raise ActivationBlocked(
+                "Warmy campaign is not configured for source "
+                f"{source_provider or 'article'}"
+            )
+        return campaign_id, manifest_hash
+
     def _append_warmy_list(
         self,
         payload: dict[str, Any],
@@ -345,6 +356,9 @@ class SalesWorkflows:
     def sync_sequence(self, payload: dict[str, Any]) -> None:
         sequence = OutreachSequenceSync.model_validate(payload["sequence"])
         recipient = RecipientSync.model_validate(payload["recipient"])
+        campaign_id, campaign_manifest_hash = self._warmy_campaign(
+            sequence.source_provider or recipient.source_provider
+        )
         list_id = self._warmy_list_id()
         if recipient.recipient_id != sequence.primary_recipient_id:
             raise ValueError("sequence primary recipient payload mismatch")
@@ -600,13 +614,6 @@ class SalesWorkflows:
             raise ActivationBlocked("campaign enrollment is draft-only; use the frozen start gate")
         if sequence["eligibility_status"] != EligibilityStatus.READY.value:
             raise ActivationBlocked("sequence is not eligible")
-        if not self.db.valid_approval_for_sequence(
-            sequence_id,
-            campaign_id=self.settings.warmy_campaign_id,
-            campaign_manifest_hash=self.settings.warmy_campaign_manifest_hash,
-            require_rendered=getattr(self.settings, "campaign_start_enabled", False),
-        ):
-            raise ActivationBlocked("sequence has no matching immutable approval batch and frozen send approval")
         recipient = self.db.get_recipient(
             recipient_id=sequence["primary_recipient_id"]
         )
@@ -616,6 +623,19 @@ class SalesWorkflows:
             raise ActivationBlocked("primary recipient has no sendable verification result")
         if self.db.is_suppressed(recipient["normalized_email"]):
             raise ActivationBlocked("primary recipient is suppressed")
+        source_provider = str(
+            recipient.get("source_provider")
+            or (sequence.get("payload") or {}).get("source_provider")
+            or ""
+        )
+        campaign_id, campaign_manifest_hash = self._warmy_campaign(source_provider)
+        if not self.db.valid_approval_for_sequence(
+            sequence_id,
+            campaign_id=campaign_id,
+            campaign_manifest_hash=campaign_manifest_hash,
+            require_rendered=getattr(self.settings, "campaign_start_enabled", False),
+        ):
+            raise ActivationBlocked("sequence has no matching immutable approval batch and frozen send approval")
         guard = inspect_recipient_guard(
             self.db, sequence["company_id"], recipient["normalized_email"]
         )
@@ -626,33 +646,39 @@ class SalesWorkflows:
         prospect_id = str(recipient.get("warmy_prospect_id") or "")
         if not prospect_id:
             raise WorkflowRetry("Warmy prospect has not been created")
-        self.settings.require_campaign_enrollment(draft_only=draft_only)
-        campaign = self.warmy.get_campaign(self.settings.warmy_campaign_id)
+        self.settings.require_campaign_enrollment(
+            draft_only=draft_only,
+            source_provider=source_provider,
+        )
+        campaign = self.warmy.get_campaign(campaign_id)
         if draft_only:
             campaign_data = campaign.get("data") or campaign
             if str(campaign_data.get("status") or "").casefold() != "draft":
                 raise ActivationBlocked("draft-only ingestion requires a live draft campaign")
         mailbox_verification = self._validate_live_campaign(
-            campaign, for_enrollment=True
+            campaign,
+            for_enrollment=True,
+            expected_campaign_id=campaign_id,
+            expected_manifest_hash=campaign_manifest_hash,
         )
         self.db.set_state(
-            f"warmy:campaign:mailbox-verification:{self.settings.warmy_campaign_id}",
+            f"warmy:campaign:mailbox-verification:{campaign_id}",
             mailbox_verification,
         )
         self._operation(
             "warmy",
-            f"enroll:{self.settings.warmy_campaign_id}:{sequence_id}:{prospect_id}",
+            f"enroll:{campaign_id}:{sequence_id}:{prospect_id}",
             payload,
             lambda: self.warmy.enroll(
-                self.settings.warmy_campaign_id,
+                campaign_id,
                 [prospect_id],
-                f"aether-enroll-{self.settings.warmy_campaign_id}-{sequence_id}",
+                f"aether-enroll-{campaign_id}-{sequence_id}",
             ),
         )
         self.db.update_sequence(
             sequence_id,
             approval_state=SequenceApprovalState.ENROLLED.value,
-            warmy_campaign_id=self.settings.warmy_campaign_id,
+            warmy_campaign_id=campaign_id,
         )
         event = self.db.get_lead_event(sequence["anchor_lead_event_id"])
         if event and event.get("pipedrive_lead_id"):
@@ -970,10 +996,11 @@ class SalesWorkflows:
             self.pipedrive.update_person(mapping.pipedrive_person_id, fields)
 
         if verification_allows_fallback_send(status):
+            campaign_id, _ = self._warmy_campaign(mapping.source_provider)
             self.db.enqueue_work(
                 "warmy.enroll",
-                f"warmy:enroll:{self.settings.warmy_campaign_id}:{mapping.warmy_prospect_id}",
-                {"outreach_id": outreach_id},
+                f"warmy:enroll:{campaign_id}:{mapping.warmy_prospect_id}",
+                {"outreach_id": outreach_id, "campaign_id": campaign_id},
             )
         elif status == VerificationStatus.INVALID:
             self.apply_suppression(
@@ -992,16 +1019,26 @@ class SalesWorkflows:
             return
         if payload.get("draft_only") is not True:
             raise ActivationBlocked("campaign enrollment is draft-only; use the frozen start gate")
-        self.settings.require_campaign_enrollment(draft_only=True)
+        campaign_id, campaign_manifest_hash = self._warmy_campaign(
+            mapping.source_provider
+        )
+        self.settings.require_campaign_enrollment(
+            draft_only=True, source_provider=mapping.source_provider
+        )
         if not mapping.why_line:
             raise ActivationBlocked("campaign activation blocked: why_line missing")
         if not mapping.warmy_prospect_id:
             raise WorkflowRetry("Warmy prospect has not been created")
-        campaign = self.warmy.get_campaign(self.settings.warmy_campaign_id)
+        campaign = self.warmy.get_campaign(campaign_id)
         campaign_data = campaign.get("data") or campaign
         if str(campaign_data.get("status") or "").casefold() != "draft":
             raise ActivationBlocked("draft-only ingestion requires a live draft campaign")
-        self._validate_live_campaign(campaign, for_enrollment=True)
+        self._validate_live_campaign(
+            campaign,
+            for_enrollment=True,
+            expected_campaign_id=campaign_id,
+            expected_manifest_hash=campaign_manifest_hash,
+        )
         route_key = f"warmy-route:{mapping.warmy_prospect_id}"
         route = self.db.get_state(route_key) or {}
         if route.get("outreach_id") not in (None, "", outreach_id):
@@ -1012,23 +1049,23 @@ class SalesWorkflows:
             return
         self._operation(
             "warmy",
-            f"enroll:{self.settings.warmy_campaign_id}:{mapping.warmy_prospect_id}",
+            f"enroll:{campaign_id}:{mapping.warmy_prospect_id}",
             payload,
             lambda: self.warmy.enroll(
-                self.settings.warmy_campaign_id,
+                campaign_id,
                 [mapping.warmy_prospect_id],
-                f"aether-enroll-{self.settings.warmy_campaign_id}-{mapping.warmy_prospect_id}",
+                f"aether-enroll-{campaign_id}-{mapping.warmy_prospect_id}",
             ),
         )
         self.db.update_mapping(
             outreach_id,
-            warmy_campaign_id=self.settings.warmy_campaign_id,
+            warmy_campaign_id=campaign_id,
         )
         self.db.set_state(
             route_key,
             {
                 "outreach_id": outreach_id,
-                "campaign_id": self.settings.warmy_campaign_id,
+                "campaign_id": campaign_id,
             },
         )
         if mapping.pipedrive_lead_id:
@@ -1048,7 +1085,7 @@ class SalesWorkflows:
         email = str(data.get("prospectEmail") or data.get("email") or "").casefold()
         prospect_id = str(data.get("prospectId") or "")
         campaign_id = str(data.get("campaignId") or "")
-        if campaign_id and campaign_id != self.settings.warmy_campaign_id:
+        if campaign_id and campaign_id not in self.settings.warmy_campaign_ids():
             LOG.info(
                 "ignoring Warmy event for a foreign campaign",
                 extra={"event_id": event_id, "campaign_id": campaign_id},
@@ -1679,13 +1716,22 @@ class SalesWorkflows:
             )
 
     def _validate_live_campaign(
-        self, response: dict[str, Any], *, for_enrollment: bool = False
+        self,
+        response: dict[str, Any],
+        *,
+        for_enrollment: bool = False,
+        expected_campaign_id: str | None = None,
+        expected_manifest_hash: str | None = None,
     ) -> dict[str, Any]:
         campaign = response.get("data") if isinstance(response, dict) else None
         if not isinstance(campaign, dict):
             campaign = response
         errors: list[str] = []
-        if str(campaign.get("id") or "") != self.settings.warmy_campaign_id:
+        expected_campaign_id = expected_campaign_id or self.settings.warmy_campaign_id
+        expected_manifest_hash = (
+            expected_manifest_hash or self.settings.warmy_campaign_manifest_hash
+        )
+        if str(campaign.get("id") or "") != expected_campaign_id:
             errors.append("campaign ID mismatch")
         status = str(campaign.get("status") or "").casefold()
         allowed_statuses = {"draft", "paused", "scheduled", "running"}
@@ -1740,10 +1786,10 @@ class SalesWorkflows:
         elif "mailboxIds" not in hash_payload:
             hash_payload["mailboxIds"] = mailbox_values
         actual_hash = campaign_manifest_hash(hash_payload)
-        if actual_hash != self.settings.warmy_campaign_manifest_hash:
+        if actual_hash != expected_manifest_hash:
             errors.append("campaign manifest hash mismatch")
         from .variants import verification_status
-        variants = verification_status(self.db, self.settings.warmy_campaign_id, actual_hash)
+        variants = verification_status(self.db, expected_campaign_id, actual_hash)
         if variants["status"] != "not_configured":
             mailbox_verification["subject_variants"] = variants
             # Inert drafts can receive leads without claiming their A/B state

@@ -79,6 +79,12 @@ def parser() -> argparse.ArgumentParser:
         help="manually enable MapsData ingestion from MAPSDATA_CSV or a completed MAPSDATA_JOB_ID",
     )
     value.add_argument(
+        "--sales-navigator",
+        action="store_true",
+        default=bool(config.SALES_NAVIGATOR_CSV),
+        help="manually enable Sales Navigator ingestion from SALES_NAVIGATOR_CSV",
+    )
+    value.add_argument(
         "--costar",
         action="store_true",
         default=bool(config.COSTAR_TENANT_CSV),
@@ -111,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         newsapi=args.newsapi,
         apify=args.apify,
         mapsdata=args.mapsdata,
+        sales_navigator=args.sales_navigator,
         costar=args.costar,
         grok_model=config.GROK_MODEL,
         extractor_model=config.EXTRACTOR_MODEL,
