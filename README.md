@@ -42,7 +42,8 @@ Comparison delivery remains a separate exactly-once Gmail command.
 | `results/YYYY-MM-DD/` | Generated lead CSVs and `leads_email.html`. Ignored by git. |
 | `scout/logs/` | Stage logs. Ignored by git. |
 | `.github/workflows/test.yml` | CI tests. Does not spend Apollo credits. |
-| `.github/workflows/nightly-scout.yml` | Manual/scheduled production run. Can spend Apollo credits. |
+| `.github/workflows/nightly-article-pipeline.yml` | Scheduled GitHub discovery, TREG enrichment, Pipedrive sync, and internal Gmail report. |
+| `.github/workflows/nightly-scout.yml` | Manual source-list preflight only. |
 | `check.sh` | Fast local self-checks for the `scout/` modules. |
 | `run-nightly.sh` | Local LaunchAgent wrapper around `uv run scout/pipeline.py`. |
 | `scout/v2/` | Typed services, SQLite state, artifacts, migration, comparison, and promotion gates. |
@@ -55,7 +56,7 @@ Comparison delivery remains a separate exactly-once Gmail command.
 
 - Python 3.12 or newer
 - `uv`
-- Authenticated Codex/Computer Use and Chrome for public article research
+- GitHub Actions secrets for TREG, Pipedrive, and Gmail domain-wide delegation
 - `news_websites.csv`
 - Apollo.io API key if you want Apollo fallback enrichment
 - MapsData API key or CSV export if you want MapsData lead ingestion
@@ -67,9 +68,9 @@ Comparison delivery remains a separate exactly-once Gmail command.
 Local runs read `.env` from the repository root. Start from `.env.example`:
 
 ```env
-# The daily Codex workflow supplies research in-session; no model API settings.
-AETHER_MODEL_PROVIDER=codex-ui
-AETHER_MODEL_NAME=codex-ui
+# The GitHub workflow uses deterministic public HTTP discovery; no model API settings.
+AETHER_MODEL_PROVIDER=disabled
+AETHER_MODEL_NAME=disabled
 DB_PATH=scout.db
 RESULTS_DIR=results
 NEWS_WEBSITES_CSV=news_websites.csv
@@ -95,13 +96,25 @@ Do not commit `.env` or any real API key.
 ## Daily no-key workflow
 
 `automation/daily-lead-pipeline.md` is the canonical daily contract. It validates
-all 125 rows in `news_websites.csv`, uses Codex/Computer Use for public-site
-discovery and browser research, writes validated article-lead artifacts under
-`results/YYYY-MM-DD/`, upserts eligible rows into Pipedrive Leads, and sends one
-structured internal report from `akhil@automationinterns.com` to
-`jon@automationinterns.com`. It never sends prospect outreach. The
-separate Warmy campaigns remain draft/paused until their existing send gate is
-explicitly approved.
+all 125 rows in `news_websites.csv`, discovers and qualifies supported public
+article evidence in GitHub Actions without a model API, enriches contacts with
+TREG, upserts eligible rows into Pipedrive Leads, and sends one structured
+internal report from `akhil@automationinterns.com` to `jw@aetherclean.com` plus
+the separate internal review copy to Jon and Akhil. It never sends prospect
+outreach. The separate Warmy campaigns remain draft/paused until their existing
+send gate is explicitly approved.
+
+### GitHub Actions secrets
+
+Configure these repository secrets before enabling the scheduled workflow:
+
+- `TREG_TOKEN`
+- `PIPEDRIVE_API_TOKEN`
+- `PIPEDRIVE_DOMAIN`
+- `PIPEDRIVE_JORDAN_USER_ID`
+- `PIPEDRIVE_DEAL_FIELDS` (JSON semantic-to-field-key map)
+- `GMAIL_SERVICE_ACCOUNT_JSON` (service-account JSON with domain-wide delegation
+  for `akhil@automationinterns.com` and Gmail read/send scopes)
 
 Apollo remains an optional, explicitly authorized enrichment provider. Add its
 key only if Apollo fallback should spend credits:

@@ -1,10 +1,13 @@
-# Daily article-lead workflow (no model API)
+# Daily article-lead workflow (GitHub, no model API)
 
 This is the Aether equivalent of the lead-enrichment workflow. It is executed
-by the Codex daily automation, using the authenticated Computer-Use/Chrome
-session for public-site research and Gmail for the internal report. It does not
-use Grok API credentials, CLIProxy, direct provider endpoints, or a separate
-headless model client.
+by `.github/workflows/nightly-article-pipeline.yml` on GitHub Actions. The
+runner reads and fetches every row in `news_websites.csv` over public HTTP,
+uses deterministic evidence gates for qualification and deduplication, uses
+TREG for bounded contact enrichment, upserts Article leads into Pipedrive, and
+sends the internal report through Gmail domain-wide delegation. It does not
+use Grok API credentials, CLIProxy, Codex/Computer Use, or a separate model
+endpoint.
 
 ## Run contract
 
@@ -18,18 +21,23 @@ headless model client.
    by the canonical source URL plus the normalized company/property, event, and
    publication date. Continue through all 125 sources and any retryable source
    work needed to reach the target. Keep only date-verifiable Arizona
-   commercial-property/facility events and
+   commercial-property/facility events supported by fetched article text and
    record the source URL, original publication date, company/property, signal,
-   score, priority, filter reason, and service angle. Never guess contact data.
+   score, location, and service angle. Never guess contact data.
 4. Save a validated article-lead CSV, an audit log, a `sales_handoff.json`, and
    an HTML report under `results/YYYY-MM-DD/`. Use atomic writes and preserve
    retryable state under `pipeline_state/`.
-5. Upsert each eligible article lead into Pipedrive through the Leads API, with
-   an `Article lead` title and the source category `article`. Keep the CRM
-   result (created/updated IDs and failures) in the run artifacts.
+5. Enrich each selected lead through the authenticated TREG route, retaining
+   only returned and verification-reviewed contact data. Upsert each eligible
+   article lead into Pipedrive through the Leads API, with an `Article lead`
+   title and the source category `article`. Keep the CRM result (created or
+   updated IDs and failures) in the run artifacts.
 6. Send exactly one internal report from `akhil@automationinterns.com` to
-   `jon@automationinterns.com` after validation and the Pipedrive handoff. Keep
-   CC and BCC empty. The report must state that no prospect outreach was sent.
+   `jw@aetherclean.com` after validation, TREG enrichment, and the Pipedrive
+   handoff. Keep CC and BCC empty. Then send one separately identified internal
+   review copy to `jon@automationinterns.com` and
+   `akhil@automationinterns.com`. The report must state that no prospect
+   outreach was sent.
    Structure it as an HTML table with: article/source link, publication date,
    company/property, event/signal, location, score/priority, service angle,
    contact name/title/email/phone/LinkedIn when verified, and the Pipedrive
@@ -52,6 +60,6 @@ campaign start remain controlled by the existing provider/send gates.
 python3 scripts/validate_source_list.py
 ```
 
-The preflight is deterministic and has no network or model dependency. The
-Codex automation owns the browser research and Gmail steps; the repository owns
+The preflight is deterministic and has no model dependency. The GitHub workflow
+owns discovery, enrichment, CRM sync, and Gmail delivery; the repository owns
 the schemas, state, validation, and artifacts.
