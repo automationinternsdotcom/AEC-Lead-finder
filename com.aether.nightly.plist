@@ -1,11 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!--
-  Aether source preflight — LaunchAgent. PREPARED, NOT INSTALLED.
-  To enable, see README-AUTOMATION.md (copy to ~/Library/LaunchAgents + bootstrap).
-  RunAtLoad is false and this file is NOT in ~/Library/LaunchAgents, so it cannot
-  fire until you deliberately install + load it.
--->
+<!-- Retired. Do not install; GitHub Actions is the only nightly runner. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -17,19 +12,8 @@
     <string>/Users/openclaw/aether-runner/run-nightly.sh</string>
   </array>
 
-  <!-- 02:00 every day -->
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key><integer>2</integer>
-    <key>Minute</key><integer>0</integer>
-  </dict>
-
-  <key>EnvironmentVariables</key>
-  <dict>
-    <!-- Legacy preflight only; daily research is owned by Codex automation. -->
-    <key>AETHER_ENV</key>
-    <string>/Users/openclaw/aether-runner/.env</string>
-  </dict>
+  <key>Disabled</key>
+  <true/>
 
   <key>RunAtLoad</key>
   <false/>

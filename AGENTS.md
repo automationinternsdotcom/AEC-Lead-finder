@@ -1,47 +1,23 @@
-# Aether AEC Scout Pipeline
+# Aether AEC article pipeline
 
-This repository follows the no-key Codex/Computer-Use lead-enrichment pattern.
+Production runs only in `.github/workflows/nightly-article-pipeline.yml`.
+Fetch the latest GitHub code before changes. The runtime scans all 125 rows in
+`news_websites.csv`, qualifies fetched evidence deterministically, enriches through
+TREG data endpoints, syncs research-only Pipedrive Leads, and sends Gmail reports.
+No Codex Automations, Mac schedules, browser research, Grok, x.ai, CLIProxy, or
+model APIs may run the production article pipeline. Legacy `scout.llm.call` fails
+closed. Do not re-enable it or add fallback runners.
 
-The canonical daily contract is:
+Only GitHub Actions secrets may store `TREG_TOKEN` and
+`GMAIL_SERVICE_ACCOUNT_JSON`; never commit or print credentials. Gmail delegation
+uses only gmail.readonly and gmail.send and impersonates akhil@automationinterns.com.
+Reports go to jw@aetherclean.com, with a separate copy to jon@automationinterns.com
+and akhil@automationinterns.com. Keep CC/BCC empty. Never send article reports or
+tests to prospect addresses or jordan@aethercommercialcleaning.us.
 
-```bash
-python3 scripts/validate_source_list.py
-```
-
-The Codex daily automation performs browser discovery/enrichment and writes the
-validated handoff. Import a validated handoff with:
-
-```bash
-bash run-daily-ingest.sh --handoff /absolute/path/to/sales_handoff.json
-```
-
-The retained V2 code can validate and project nine resumable in-process stages
-when supplied with a Codex-produced handoff:
-
-1. Curated-site and validated-feed discovery.
-2. Typed qualification with review quarantine.
-3. Exact and coverage-checked fuzzy event deduplication.
-4. Sourced, approved-template why-line generation for LinkedIn and first-email outreach.
-5. Organization-grouped decision-maker research.
-6. Person-grouped contact research and verification.
-7. Optional, authorization-gated Apollo fallback.
-8. Complete-ID scoring.
-9. Compatibility CSV/HTML and auditable JSONL export.
-
-Each run persists stage state, raw/final artifacts, and a manifest under
-`results/<day>/runs/<run_id>/`. Use `--run-id ID --resume` to continue a run.
-Legacy stage programs remain compatibility entrypoints only; canonical `scout/`
-code must not import the deprecated top-level `pipeline/` package.
-
-The intentional architecture difference from the old GPS runtime is discovery
-and model routing: Aether uses the curated `news_websites.csv` file in the repo
-root, while research is performed in-session by Codex/Computer Use rather than
-through a model API or CLIProxy.
-
-Start commands from the repo root. Keep secrets in `.env`; do not commit them.
-Use `--apollo-go` only when the operator explicitly wants Apollo credits spent.
-NewsAPI, Apify, MapsData, and Costar are manual-only via `--newsapi`, `--apify`,
-`--mapsdata`, and `--costar`.
+Validate sources with `python3 scripts/validate_source_list.py`, run `uv run pytest -q`
+and `./check.sh`. Dispatch a controlled test only after Gmail and TREG configuration.
+Legacy sales modules remain separate from the article workflow.
 
 ## Production send contract
 

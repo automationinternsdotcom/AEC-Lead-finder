@@ -18,6 +18,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from email.message import EmailMessage
+from email.utils import getaddresses
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
@@ -25,9 +26,9 @@ from typing import Any, Iterable
 import httpx
 
 from scout.v2.artifacts import ArtifactStore
-from scout.v2.contracts import Evidence, LeadEvent, Organization
+from scout.v2.contracts import Evidence, Organization
 from scout.v2.discovery import CuratedSiteAdapter, load_curated_sources
-from scout.v2.ids import event_id, organization_id, stable_uuid
+from scout.v2.ids import organization_id, stable_uuid
 from scout.v2.state import StateStore
 from scout.v2.treg import TregClient, TregDeferred, TregResolver
 from scout.v2.verification import ContactVerifier
@@ -273,10 +274,24 @@ def _split_name(value: str) -> tuple[str, str]:
     return (parts[0], " ".join(parts[1:])) if parts else ("", "")
 
 
+class ArticleTregClient(TregClient):
+    """Only data enrichment endpoints are available to the nightly runtime."""
+    ENDPOINTS = frozenset({
+        "hunter.x.domain-finder", "companyenrich.companies.autocomplete",
+        "treg.people.email.find", "icypeas.people.search",
+        "icypeas.people.search.count", "leadsforge.people.search",
+    })
+
+    def call(self, endpoint, params, **kwargs):
+        if endpoint not in self.ENDPOINTS:
+            raise RuntimeError("Endpoint prohibited by the no-model article pipeline")
+        return super().call(endpoint, params, **kwargs)
+
+
 def enrich_with_treg(leads: list[ArticleLead], *, state_path: Path, cache_path: Path, budget_usd: float) -> list[ArticleLead]:
     state = StateStore(state_path)
     state.migrate()
-    client = TregClient(cache_path, budget_usd=budget_usd)
+    client = ArticleTregClient(cache_path, budget_usd=budget_usd, token=os.environ["TREG_TOKEN"])
     resolver = TregResolver(client, ContactVerifier(state))
     try:
         for lead in leads:
@@ -288,25 +303,8 @@ def enrich_with_treg(leads: list[ArticleLead], *, state_path: Path, cache_path: 
                 location=lead.location,
                 evidence=evidence,
             )
-            event = LeadEvent(
-                lead_event_id=event_id(org_id, lead.event, lead.location, lead.publication_date),
-                run_id="github-article-pipeline",
-                organization_id=org_id,
-                source_provider="article",
-                primary_candidate_id=stable_uuid("github-candidate", lead.source_url),
-                supporting_candidate_ids=[stable_uuid("github-candidate", lead.source_url)],
-                event=lead.event,
-                location=lead.location,
-                date_posted=date.fromisoformat(lead.publication_date),
-                summary=lead.summary,
-                priority="high" if lead.score >= 75 else "medium",
-                property_type="commercial_property",
-                service_angle=lead.service_angle,
-                confidence="high",
-                evidence=evidence,
-            )
             try:
-                result = resolver.resolve(organization, opportunities=[event])
+                result = resolver.resolve(organization)  # Exact company lookup only; no model identity endpoint.
             except TregDeferred as exc:
                 lead.enrichment_error = str(exc)
                 continue
@@ -334,6 +332,9 @@ class PipedriveArticleWriter:
         missing = sorted(required - set(fields))
         if missing:
             raise RuntimeError(f"PIPEDRIVE_DEAL_FIELDS is missing: {', '.join(missing)}")
+        domain = domain.strip().removeprefix("https://").rstrip("/").removesuffix(".pipedrive.com")
+        if not re.fullmatch(r"[a-zA-Z0-9-]+", domain):
+            raise RuntimeError("PIPEDRIVE_DOMAIN must be a Pipedrive tenant name or hostname")
         self.http = httpx.Client(
             base_url=f"https://{domain}.pipedrive.com/api/",
             params={"api_token": token},
@@ -350,21 +351,21 @@ class PipedriveArticleWriter:
         response = self.http.request(method, path, **kwargs)
         body = response.json() if response.content else {}
         if not 200 <= response.status_code < 300 or body.get("success") is False:
-            raise RuntimeError(f"Pipedrive {method} {path} failed: {response.status_code} {body}")
+            raise RuntimeError(f"Pipedrive {method} {path} failed: HTTP {response.status_code}")
         return body.get("data")
 
     @staticmethod
-    def _first_id(data: Any) -> int | None:
+    def _first_id(data: Any) -> int | str | None:
         items = data.get("items", []) if isinstance(data, dict) else []
         if not items:
             return None
         item = items[0].get("item") or items[0]
-        return int(item["id"]) if item.get("id") is not None else None
+        return item["id"] if item.get("id") is not None else None
 
     def _organization(self, name: str, location: str) -> int:
         found = self._first_id(self._request("GET", "v2/organizations/search", params={"term": name, "fields": "name", "exact_match": "true", "limit": 1}))
         if found is not None:
-            return found
+            return int(found)
         data = self._request("POST", "v2/organizations", json={"name": name, "owner_id": self.owner_id, "address": {"value": location}})
         return int(data["id"])
 
@@ -404,22 +405,29 @@ class GmailReportSender:
         ).with_subject(REPORT_SENDER)
         self.service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
-    def _sent_ids(self, subject: str) -> list[str]:
+    def _sent_ids(self, subject: str, recipients: tuple[str, ...]) -> list[str]:
         result = self.service.users().messages().list(
             userId=REPORT_SENDER, q=f'in:sent from:{REPORT_SENDER} subject:"{subject}"', maxResults=20
         ).execute()
         ids: list[str] = []
         for item in result.get("messages") or []:
             message = self.service.users().messages().get(
-                userId=REPORT_SENDER, id=item["id"], format="metadata", metadataHeaders=["Subject", "From"]
+                userId=REPORT_SENDER, id=item["id"], format="metadata", metadataHeaders=["Subject", "From", "To", "Cc", "Bcc"]
             ).execute()
             headers = {h["name"].casefold(): h["value"] for h in message.get("payload", {}).get("headers", [])}
-            if headers.get("subject") == subject and REPORT_SENDER in headers.get("from", "").casefold():
-                ids.append(str(item["id"]))
+            if headers.get("subject") != subject:
+                continue
+            addresses = lambda key: tuple(sorted(address.casefold() for _, address in getaddresses([headers.get(key, "")])))
+            if (addresses("from") != (REPORT_SENDER,) or addresses("to") != tuple(sorted(recipients))
+                    or addresses("cc") or addresses("bcc")):
+                raise RuntimeError("Gmail report envelope verification failed")
+            ids.append(str(item["id"]))
         return ids
 
     def send_html_once(self, *, recipients: tuple[str, ...], subject: str, html_body: str) -> str:
-        existing = self._sent_ids(subject)
+        if recipients not in {(REPORT_RECIPIENT,), INTERNAL_COPY_RECIPIENTS}:
+            raise RuntimeError("Article reports may only use the fixed internal recipient routes")
+        existing = self._sent_ids(subject, recipients)
         if len(existing) > 1:
             raise RuntimeError(f"Gmail exact-subject collision for {subject!r}")
         if existing:
@@ -428,7 +436,7 @@ class GmailReportSender:
         message["To"] = ", ".join(recipients)
         message["From"] = REPORT_SENDER
         message["Subject"] = subject
-        message.set_content("Aether article report. Please view the HTML version.")
+        message.set_content("Aether article report. Please view the HTML version. Sent by Codex on Jon Schack’s behalf.")
         message.add_alternative(html_body, subtype="html")
         import base64
 
@@ -437,7 +445,7 @@ class GmailReportSender:
         message_id = str(response.get("id") or "")
         if not message_id:
             raise RuntimeError("Gmail send returned no message ID")
-        if self._sent_ids(subject) != [message_id]:
+        if self._sent_ids(subject, recipients) != [message_id]:
             raise RuntimeError(f"Gmail post-send verification failed for {subject!r}")
         return message_id
 
@@ -472,7 +480,8 @@ def render_report(leads: list[ArticleLead], *, source_count: int, source_errors:
         "<p><strong>No prospect outreach was sent.</strong> These are internal article leads for review and Pipedrive tracking.</p>"
         "<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr>"
         "<th>Score</th><th>Company / property</th><th>Event</th><th>Location</th><th>Source summary</th><th>Service angle</th><th>Verified contact</th><th>Pipedrive lead</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></body></html>"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        "<p>Sent by Codex on Jon Schack’s behalf. Delivered by GitHub Actions.</p></body></html>"
     )
 
 
@@ -524,7 +533,27 @@ def require_github_configuration() -> dict[str, str]:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if os.environ.get("AETHER_GITHUB_PIPELINE_ENABLED", "").casefold() not in {"1", "true", "yes", "on"}:
         raise RuntimeError("AETHER_GITHUB_PIPELINE_ENABLED must be true")
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise RuntimeError("Production article pipeline must run in GitHub Actions")
     pipedrive_fields = require_github_configuration()
+    # Authenticate every provider before discovery, paid enrichment, or writes.
+    sender = GmailReportSender(os.environ["GMAIL_SERVICE_ACCOUNT_JSON"])
+    profile = sender.service.users().getProfile(userId=REPORT_SENDER).execute()
+    if profile.get("emailAddress", "").casefold() != REPORT_SENDER:
+        raise RuntimeError("Gmail delegation did not resolve to the report sender")
+    treg = ArticleTregClient(Path(args.state_dir) / "treg-cache.sqlite",
+                             token=os.environ["TREG_TOKEN"])
+    try:
+        treg.balance()
+    finally:
+        treg.close()
+    preflight_writer = PipedriveArticleWriter(
+        domain=os.environ["PIPEDRIVE_DOMAIN"], token=os.environ["PIPEDRIVE_API_TOKEN"],
+        owner_id=int(os.environ["PIPEDRIVE_JORDAN_USER_ID"]), fields=pipedrive_fields)
+    try:
+        preflight_writer._request("GET", "v1/users/me")
+    finally:
+        preflight_writer.close()
     source_path = Path(args.sources).resolve()
     sources = validate_source_list(source_path)
     stamp = args.until
@@ -532,7 +561,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     until = date.fromisoformat(stamp)
     state_dir = Path(args.state_dir).resolve()
     results_dir = Path(args.results_dir).resolve()
-    run_id = f"github-article-{stamp}"
+    controlled = getattr(args, "controlled_test", False)
+    test_suffix = "-test-" + os.environ["GITHUB_RUN_ID"] if controlled else ""
+    run_id = f"github-article-{stamp}{test_suffix}"
     state = StateStore(state_dir / "scout.sqlite")
     state.migrate()
     artifacts = ArtifactStore(results_dir, stamp, run_id, state)
@@ -562,6 +593,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             leads.append(lead)
     leads = dedupe_leads(leads)
     target = int(os.environ.get("GITHUB_ARTICLE_LEAD_TARGET", TARGET_LEADS))
+    if controlled:
+        target = 1
     if len(leads) > target:
         leads = leads[:target]
     leads = enrich_with_treg(
@@ -591,8 +624,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         leads, source_count=len(sources), source_errors=len(batch.source_errors), since=since, until=until
     )
     (output_dir / "article_report.html").write_text(report_html, encoding="utf-8")
-    report_subject = f"Aether article leads — {stamp}"
-    sender = GmailReportSender(os.environ.get("GMAIL_SERVICE_ACCOUNT_JSON", ""))
+    report_subject = f"Aether article leads — {stamp}{test_suffix}"
     report_message_id = sender.send_html_once(
         recipients=(REPORT_RECIPIENT,), subject=report_subject, html_body=report_html
     )
@@ -603,6 +635,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     result = {
         "run_id": run_id,
+        "controlled_test": controlled,
+        "sender": REPORT_SENDER,
         "source_count": len(sources),
         "source_errors": len(batch.source_errors),
         "candidate_count": len(batch.candidates),
@@ -627,6 +661,7 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--since", default=(date.today() - timedelta(days=1)).isoformat())
     parser.add_argument("--until", default=date.today().isoformat())
+    parser.add_argument("--controlled-test", action="store_true", help="Scan all sources, enrich/sync at most one lead, send only fixed internal reports")
     parser.add_argument("--workers", type=int, default=8)
     return parser
 
@@ -635,5 +670,6 @@ if __name__ == "__main__":
     try:
         print(json.dumps(run(parser().parse_args()), indent=2, sort_keys=True))
     except Exception as exc:  # noqa: BLE001 - GitHub boundary emits a concise failure
-        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
-        raise
+        # Provider exceptions can embed credential-bearing URLs or response bodies.
+        print(f"ERROR: {type(exc).__name__}; pipeline failed (details suppressed to protect secrets)", file=sys.stderr)
+        sys.exit(1)
