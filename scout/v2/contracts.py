@@ -121,6 +121,7 @@ class LeadEvent(BaseModel):
     lead_event_id: str
     run_id: str
     organization_id: str
+    source_provider: str = ""
     primary_candidate_id: str
     supporting_candidate_ids: list[str] = Field(min_length=1)
     event: str = Field(min_length=1)

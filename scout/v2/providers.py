@@ -261,6 +261,38 @@ class MapsDataAdapter:
             return response.json()
 
 
+class SalesNavigatorAdapter:
+    """Import an operator-exported Sales Navigator CSV without UI automation."""
+
+    name = "sales_navigator"
+
+    def __init__(self, csv_paths: list[str] | None = None):
+        self.csv_paths = csv_paths if csv_paths is not None else _env_list(
+            "SALES_NAVIGATOR_CSV"
+        ) or _env_list("SALES_NAV_CSV")
+
+    def preflight(self) -> None:
+        if not self.csv_paths:
+            raise ProviderPreflightError("SALES_NAVIGATOR_CSV is required")
+        for path in self.csv_paths:
+            if not Path(path).is_file():
+                raise ProviderPreflightError(f"Sales Navigator CSV not found: {path}")
+
+    def discover(self, start: date, end: date) -> list[ProviderRecord]:
+        self.preflight()
+        records: dict[str, ProviderRecord] = {}
+        for path in self.csv_paths:
+            text = Path(path).read_text(encoding="utf-8-sig")
+            for record in _records_from_rows(
+                self.name,
+                _read_csv_rows(text),
+                default_date=end.isoformat(),
+                raw_context={"csv_path": path},
+            ):
+                records.setdefault(record.provider_id, record)
+        return list(records.values())
+
+
 class CostarTenantAdapter:
     """Import operator-reviewed Costar tenant exports as discovery records."""
 
@@ -415,6 +447,16 @@ def _row_title(row: dict, provider: str) -> str:
             _first(row, "city"),
             _first(row, "state"),
             _first(row, "event", "lease_status", "occupancy_status"),
+        ]
+    elif provider == "sales_navigator":
+        pieces = [
+            _first(row, "company_name", "company", "organization", "organization_name"),
+            _first(row, "title", "job_title", "current_title", "role", "position"),
+            _first(row, "industry", "segment", "function", "seniority"),
+            _first(row, "city", "location"),
+            _first(row, "state", "region"),
+            _first(row, "email", "work_email", "contact_email"),
+            _first(row, "linkedin_url", "linkedin", "profile_url"),
         ]
     else:
         pieces = [

@@ -99,6 +99,11 @@ class Settings:
     warmy_mcp_url: str = "https://warmysender.com/mcp"
     warmy_campaign_id: str = ""
     warmy_campaign_manifest_hash: str = ""
+    # Optional second campaign for provider-collected prospect sources.  It is
+    # deliberately independent from the article campaign so a source import
+    # can never silently release the article backlog.
+    warmy_maps_sales_campaign_id: str = ""
+    warmy_maps_sales_campaign_manifest_hash: str = ""
     # Canonical prospect list for daily enrichment.  There is deliberately no
     # default: a missing ID must hold list-only ingestion rather than guessing
     # from a UI name or attaching contacts to an arbitrary campaign.
@@ -179,6 +184,12 @@ class Settings:
             warmy_campaign_manifest_hash=os.environ.get(
                 "WARMY_CAMPAIGN_MANIFEST_HASH", ""
             ).strip(),
+            warmy_maps_sales_campaign_id=os.environ.get(
+                "WARMY_MAPS_SALES_CAMPAIGN_ID", ""
+            ).strip(),
+            warmy_maps_sales_campaign_manifest_hash=os.environ.get(
+                "WARMY_MAPS_SALES_CAMPAIGN_MANIFEST_HASH", ""
+            ).strip(),
             warmy_prospect_list_id=os.environ.get("WARMY_PROSPECT_LIST_ID", "").strip(),
             warmy_list_sync_enabled=_flag("WARMY_LIST_SYNC_ENABLED"),
             warmy_mailbox_ids=mailboxes,
@@ -236,20 +247,50 @@ class Settings:
                 "campaign activation blocked: " + ", ".join(missing)
             )
 
-    def campaign_activation_missing(self) -> list[str]:
-        missing = self.campaign_enrollment_missing()
+    @staticmethod
+    def _is_maps_sales_source(source_provider: str) -> bool:
+        normalized = str(source_provider or "").strip().casefold().replace("-", "_")
+        return normalized in {"mapsdata", "sales_navigator", "salesnav"}
+
+    def warmy_campaign_for_source(self, source_provider: str = "") -> tuple[str, str]:
+        """Return the immutable campaign identity for one lead source."""
+        if self._is_maps_sales_source(source_provider):
+            return (
+                self.warmy_maps_sales_campaign_id,
+                self.warmy_maps_sales_campaign_manifest_hash,
+            )
+        return self.warmy_campaign_id, self.warmy_campaign_manifest_hash
+
+    def warmy_campaign_ids(self) -> set[str]:
+        return {
+            campaign_id
+            for campaign_id in (
+                self.warmy_campaign_id,
+                self.warmy_maps_sales_campaign_id,
+            )
+            if campaign_id
+        }
+
+    def campaign_activation_missing(self, *, source_provider: str = "") -> list[str]:
+        missing = self.campaign_enrollment_missing(source_provider=source_provider)
         if not self.campaign_start_enabled:
             missing.insert(2, "CAMPAIGN_START_ENABLED")
         return missing
 
-    def require_campaign_enrollment(self, *, draft_only: bool = False) -> None:
-        missing = self.campaign_enrollment_missing(draft_only=draft_only)
+    def require_campaign_enrollment(
+        self, *, draft_only: bool = False, source_provider: str = ""
+    ) -> None:
+        missing = self.campaign_enrollment_missing(
+            draft_only=draft_only, source_provider=source_provider
+        )
         if missing:
             raise ActivationBlocked(
                 "campaign enrollment blocked: " + ", ".join(missing)
             )
 
-    def campaign_enrollment_missing(self, *, draft_only: bool = False) -> list[str]:
+    def campaign_enrollment_missing(
+        self, *, draft_only: bool = False, source_provider: str = ""
+    ) -> list[str]:
         missing: list[str] = []
         if not self.provider_writes_enabled:
             missing.append("PROVIDER_WRITES_ENABLED")
@@ -271,10 +312,15 @@ class Settings:
             missing.append("WARMY_API_KEY")
         if not self.warmy_webhook_secret:
             missing.append("WARMY_WEBHOOK_SECRET")
-        if not self.warmy_campaign_id:
-            missing.append("WARMY_CAMPAIGN_ID")
-        if not self.warmy_campaign_manifest_hash:
-            missing.append("WARMY_CAMPAIGN_MANIFEST_HASH")
+        campaign_id, manifest_hash = self.warmy_campaign_for_source(source_provider)
+        campaign_label = (
+            "WARMY_MAPS_SALES_CAMPAIGN" if self._is_maps_sales_source(source_provider)
+            else "WARMY_CAMPAIGN"
+        )
+        if not campaign_id:
+            missing.append(f"{campaign_label}_ID")
+        if not manifest_hash:
+            missing.append(f"{campaign_label}_MANIFEST_HASH")
         mailbox_ids = set(self.warmy_mailbox_ids)
         if len(self.warmy_mailbox_ids) != 6 or len(mailbox_ids) != 6:
             missing.append("WARMY_MAILBOX_IDS (six unique IDs)")

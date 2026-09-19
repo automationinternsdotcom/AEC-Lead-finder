@@ -497,6 +497,7 @@ class QualificationService:
             lead_event_id=lead_event_id,
             run_id=candidate.run_id,
             organization_id=org_id,
+            source_provider=candidate.provider,
             primary_candidate_id=candidate.candidate_id,
             supporting_candidate_ids=list(support_ids),
             event=payload.event.strip(),

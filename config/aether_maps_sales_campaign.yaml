@@ -1,0 +1,95 @@
+name: Aether Maps + Sales Navigator Prospect Outreach
+description: Separate outreach for operator-imported MapsData and Sales Navigator prospects.
+channel: email
+timezone: America/Phoenix
+dailySendLimit: 150
+sendingWindowStart: 8
+sendingWindowEnd: 16
+scheduleDays: [1, 2, 3, 4, 5]
+stopOnReply: true
+stopOnBounce: true
+stopOnUnsubscribe: true
+trackOpens: false
+trackClicks: false
+mailboxIds: []
+steps:
+  - stepIndex: 0
+    type: email
+    subject: "A facilities idea for {{company}}"
+    bodyHtml: >-
+      <p>{{whyLine}}</p><p>This is a commercial message from Aether Facility Services.</p><p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858</p><p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
+    bodyText: |-
+      {{whyLine}}
+
+      This is a commercial message from Aether Facility Services.
+
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+
+      Unsubscribe: {{unsubscribeUrl}}
+      {{AETHER_POSTAL_ADDRESS}}
+    delayDays: 0
+    delayHours: 0
+    isActive: true
+  - stepIndex: 1
+    type: email
+    subject: "Following up on facilities support for {{company}}"
+    bodyHtml: >-
+      <p>Hi {{firstName}},</p><p>I wanted to follow up in case my note arrived at a busy time. Is facilities support something you oversee at {{company}}, or is there someone else I should contact?</p><p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858</p><p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
+    bodyText: |-
+      Hi {{firstName}},
+
+      I wanted to follow up in case my note arrived at a busy time. Is facilities support something you oversee at {{company}}, or is there someone else I should contact?
+
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+
+      Unsubscribe: {{unsubscribeUrl}}
+      {{AETHER_POSTAL_ADDRESS}}
+    delayDays: 3
+    delayHours: 0
+    isActive: true
+  - stepIndex: 2
+    type: email
+    subject: "One team for cleaning and facility work"
+    bodyHtml: >-
+      <p>Hi {{firstName}},</p><p>Would it help if I sent a short capabilities overview for {{company}}?</p><p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858</p><p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
+    bodyText: |-
+      Hi {{firstName}},
+
+      Would it help if I sent a short capabilities overview for {{company}}?
+
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+
+      Unsubscribe: {{unsubscribeUrl}}
+      {{AETHER_POSTAL_ADDRESS}}
+    delayDays: 4
+    delayHours: 0
+    isActive: true
+  - stepIndex: 3
+    type: email
+    subject: "Should I close the loop?"
+    bodyHtml: >-
+      <p>Hi {{firstName}},</p><p>I have not heard back, so I will close the loop. If cleaning or facility support becomes a priority for {{company}}, I would be glad to compare needs and options.</p><p>Jordan Whitehurst, Partner<br>Aether Facility Services, LLC<br>O: (602) 612-6393<br>M: (813) 992-0858</p><p><a href="{{unsubscribeUrl}}">Unsubscribe</a><br>{{AETHER_POSTAL_ADDRESS}}</p>
+    bodyText: |-
+      Hi {{firstName}},
+
+      I have not heard back, so I will close the loop. If cleaning or facility support becomes a priority for {{company}}, I would be glad to compare needs and options.
+
+      Jordan Whitehurst, Partner
+      Aether Facility Services, LLC
+      O: (602) 612-6393
+      M: (813) 992-0858
+
+      Unsubscribe: {{unsubscribeUrl}}
+      {{AETHER_POSTAL_ADDRESS}}
+    delayDays: 7
+    delayHours: 0
+    isActive: true

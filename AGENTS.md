@@ -1,14 +1,22 @@
 # Aether AEC Scout Pipeline
 
-This repository follows the `gps-grok-leadfinder` operating pattern.
+This repository follows the no-key Codex/Computer-Use lead-enrichment pattern.
 
-The canonical daily command is:
+The canonical daily contract is:
 
 ```bash
-uv run scout/pipeline.py
+python3 scripts/validate_source_list.py
 ```
 
-The V2 pipeline runs nine resumable in-process stages:
+The Codex daily automation performs browser discovery/enrichment and writes the
+validated handoff. Import a validated handoff with:
+
+```bash
+bash run-daily-ingest.sh --handoff /absolute/path/to/sales_handoff.json
+```
+
+The retained V2 code can validate and project nine resumable in-process stages
+when supplied with a Codex-produced handoff:
 
 1. Curated-site and validated-feed discovery.
 2. Typed qualification with review quarantine.
@@ -25,9 +33,10 @@ Each run persists stage state, raw/final artifacts, and a manifest under
 Legacy stage programs remain compatibility entrypoints only; canonical `scout/`
 code must not import the deprecated top-level `pipeline/` package.
 
-The only intentional architecture difference from `gps-grok-leadfinder` is discovery:
-GPS uses Google News/provider expansion, while Aether AEC uses the curated
-`news_websites.csv` file in the repo root.
+The intentional architecture difference from the old GPS runtime is discovery
+and model routing: Aether uses the curated `news_websites.csv` file in the repo
+root, while research is performed in-session by Codex/Computer Use rather than
+through a model API or CLIProxy.
 
 Start commands from the repo root. Keep secrets in `.env`; do not commit them.
 Use `--apollo-go` only when the operator explicitly wants Apollo credits spent.

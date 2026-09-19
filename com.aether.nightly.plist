@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Aether nightly lead pipeline — LaunchAgent. PREPARED, NOT INSTALLED.
+  Aether source preflight — LaunchAgent. PREPARED, NOT INSTALLED.
   To enable, see README-AUTOMATION.md (copy to ~/Library/LaunchAgents + bootstrap).
   RunAtLoad is false and this file is NOT in ~/Library/LaunchAgents, so it cannot
   fire until you deliberately install + load it.
@@ -26,7 +26,7 @@
 
   <key>EnvironmentVariables</key>
   <dict>
-    <!-- Optional env file for Responses API / Apollo settings. -->
+    <!-- Legacy preflight only; daily research is owned by Codex automation. -->
     <key>AETHER_ENV</key>
     <string>/Users/openclaw/aether-runner/.env</string>
   </dict>

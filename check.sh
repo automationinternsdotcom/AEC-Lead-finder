@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
 cd "$(dirname "$0")/scout"
+python3 ../scripts/validate_source_list.py
 if command -v uv >/dev/null 2>&1; then
   PYTHON="uv run python3"
 else

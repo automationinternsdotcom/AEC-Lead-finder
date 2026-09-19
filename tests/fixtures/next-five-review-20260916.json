@@ -1,0 +1,13 @@
+{
+  "campaign_id": "campaign-1",
+  "selection_count": 5,
+  "approval_status": "HOLD",
+  "approval_blocker": "footer/address conflict requires review",
+  "candidates": [
+    {"email": "one@example.com", "first_name": "One", "company": "One Co", "reviewed_property": "One Property", "why_line": "Reviewed source one."},
+    {"email": "two@example.com", "first_name": "Two", "company": "Two Co", "reviewed_property": "Two Property", "why_line": "Reviewed source two."},
+    {"email": "three@example.com", "first_name": "Three", "company": "Three Co", "reviewed_property": "Three Property", "why_line": "Reviewed source three."},
+    {"email": "four@example.com", "first_name": "Four", "company": "Four Co", "reviewed_property": "Four Property", "why_line": "Reviewed source four."},
+    {"email": "five@example.com", "first_name": "Five", "company": "Five Co", "reviewed_property": "Five Property", "why_line": "Reviewed source five."}
+  ]
+}

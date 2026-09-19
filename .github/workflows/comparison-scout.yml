@@ -1,132 +1,23 @@
-name: V1 V2 scout comparison
+name: legacy comparison preflight
 
 on:
   workflow_dispatch:
-    inputs:
-      apollo_go:
-        description: "Authorize union-deduplicated Apollo resolution in the external harness."
-        required: false
-        type: boolean
-        default: false
-  schedule:
-    - cron: "0 10 * * *"
 
 jobs:
-  compare:
-    if: github.event_name == 'workflow_dispatch' || vars.AETHER_V2_COMPARISON_ENABLED == 'true'
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     permissions:
       contents: read
-      actions: write
-    env:
-      CLIPROXY_BASE_URL: ${{ secrets.CLIPROXY_BASE_URL }}
-      CLIPROXY_API_KEY: ${{ secrets.CLIPROXY_API_KEY }}
-      # Comparison is deliberately model-pinned; the harness enforces this too.
-      GROK_MODEL: grok-4.3
-      EXTRACTOR_MODEL: grok-4.3
-      APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
-      APOLLO_AUTHORIZED: ${{ github.event.inputs.apollo_go == 'true' || (github.event_name == 'schedule' && vars.AETHER_COMPARISON_APOLLO_ENABLED == 'true') }}
     steps:
-      - name: Check out V2 harness
-        uses: actions/checkout@v4
-        with:
-          path: v2
+      - uses: actions/checkout@v4
 
-      - name: Check out frozen V1
-        uses: actions/checkout@v4
-        with:
-          # Immutable V1 baseline; do not replace with a moving branch.
-          ref: 1d54e29dc47fedcdf30935af24eb981ac57def7f
-          path: v1
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Sync both frozen runtimes
+      - name: Validate the no-key source contract
         run: |
-          uv sync --project v1
-          uv sync --project v2
+          python3 scripts/validate_source_list.py
 
-      - name: Capture source snapshot and baseline
-        id: baseline
-        run: |
-          mkdir -p comparison/snapshots
-          cp v2/news_websites.csv comparison/snapshots/news_websites.csv
-          echo "sha=$(git -C v1 rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore frozen V1 database
-        uses: actions/cache/restore@v4
-        with:
-          path: comparison/state/v1
-          key: scout-db-v1-${{ steps.baseline.outputs.sha }}-comparison-${{ github.run_id }}
-          restore-keys: |
-            scout-db-v1-${{ steps.baseline.outputs.sha }}-comparison-
-
-      - name: Restore V2 database
-        uses: actions/cache/restore@v4
-        with:
-          path: comparison/state/v2
-          key: scout-db-v2-3-comparison-${{ github.run_id }}
-          restore-keys: |
-            scout-db-v2-3-comparison-
-
-      - name: Restore shared Apollo cache
-        uses: actions/cache/restore@v4
-        with:
-          path: comparison/state/shared-apollo.db
-          key: scout-apollo-shared-v1-${{ github.run_id }}
-          restore-keys: |
-            scout-apollo-shared-v1-
-
-      - name: Validate runtime secrets
-        run: |
-          test -n "$CLIPROXY_BASE_URL"
-          test -n "$CLIPROXY_API_KEY"
-          if [ "$APOLLO_AUTHORIZED" = "true" ]; then test -n "$APOLLO_API_KEY"; fi
-
-      - name: Run isolated comparison
-        run: |
-          APOLLO_ARGS=""
-          if [ "$APOLLO_AUTHORIZED" = "true" ]; then APOLLO_ARGS="--apollo-go"; fi
-          uv run --project v2 v2/scout/compare_v1_v2.py \
-            --v1-checkout v1 \
-            --v2-checkout v2 \
-            --v1-sha "${{ steps.baseline.outputs.sha }}" \
-            --work-dir comparison \
-            --source-snapshot comparison/snapshots/news_websites.csv \
-            --run-id "${{ github.run_id }}" \
-            $APOLLO_ARGS
-
-      - name: Upload comparison artifacts
-        if: always()
+      - name: Upload source-list evidence
         uses: actions/upload-artifact@v4
         with:
-          name: aec-v1-v2-comparison-${{ github.run_id }}
-          path: comparison/runs/${{ github.run_id }}/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Save frozen V1 database
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: comparison/state/v1
-          key: scout-db-v1-${{ steps.baseline.outputs.sha }}-comparison-${{ github.run_id }}
-
-      - name: Save V2 database
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: comparison/state/v2
-          key: scout-db-v2-3-comparison-${{ github.run_id }}
-
-      - name: Save shared Apollo cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: comparison/state/shared-apollo.db
-          key: scout-apollo-shared-v1-${{ github.run_id }}
+          name: aether-comparison-preflight-${{ github.run_id }}
+          path: news_websites.csv
+          retention-days: 14

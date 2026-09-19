@@ -383,6 +383,7 @@ class ExportService:
                     run_id=self.artifacts.run_id,
                     lead_event_id=event.lead_event_id,
                     company_id=profile.company_id,
+                    source_provider=event.source_provider or (primary.provider if primary else ""),
                     organization_name=profile.canonical_name,
                     event_role=EventRole.ANCHOR if is_anchor else EventRole.SUPPORTING,
                     event=event.event,
@@ -459,6 +460,14 @@ class ExportService:
                     ),
                     run_id=self.artifacts.run_id,
                     company_id=profile.company_id,
+                    source_provider=next(
+                        (
+                            item.source_provider
+                            for item in events
+                            if item.lead_event_id == profile.anchor_lead_event_id
+                        ),
+                        "",
+                    ),
                     campaign_protocol=HANDOFF_PROTOCOL_VERSION,
                     anchor_lead_event_id=profile.anchor_lead_event_id,
                     supporting_event_ids=[

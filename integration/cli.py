@@ -337,6 +337,12 @@ def main() -> int:
     verify_campaign.add_argument("--text-only", action="store_true", help="Verify an approved text-only signature without requiring a logo")
 
     start = commands.add_parser("start-campaign")
+    start.add_argument(
+        "--kind",
+        choices=("article", "maps-sales"),
+        default="article",
+        help="which independently approved Warmy campaign to start",
+    )
     start.add_argument("--apply", action="store_true")
 
     commands.add_parser("doctor")
@@ -506,6 +512,13 @@ def main() -> int:
                 "campaign_activation_missing": settings.campaign_activation_missing(),
                 "campaign_enrollment_ready": settings.campaign_enrollment_ready,
                 "campaign_enrollment_missing": settings.campaign_enrollment_missing(),
+                "maps_sales_campaign_configured": bool(
+                    settings.warmy_maps_sales_campaign_id
+                    and settings.warmy_maps_sales_campaign_manifest_hash
+                ),
+                "maps_sales_campaign_enrollment_missing": settings.campaign_enrollment_missing(
+                    source_provider="mapsdata"
+                ),
             }
         )
         return 0
@@ -714,30 +727,41 @@ def main() -> int:
             warmy.close()
         return 0
     if args.command == "start-campaign":
+        source_provider = "mapsdata" if args.kind == "maps-sales" else ""
+        campaign_id, selected_campaign_manifest_hash = settings.warmy_campaign_for_source(
+            source_provider
+        )
         if not args.apply:
             _json(
                 {
-                    "would_start": settings.warmy_campaign_id,
-                    "ready": settings.campaign_activation_ready,
+                    "kind": args.kind,
+                    "would_start": campaign_id,
+                    "ready": not settings.campaign_activation_missing(
+                        source_provider=source_provider
+                    ),
                 }
             )
             return 0
-        settings.require_campaign_activation()
+        missing = settings.campaign_activation_missing(source_provider=source_provider)
+        if missing:
+            raise ActivationBlocked(
+                "campaign activation blocked: " + ", ".join(missing)
+            )
         # Warmy's external scheduler cannot be intercepted by local code.  A
         # start request issued through this pipeline is therefore allowed only
         # when a complete literal recipient-specific approval artifact is
         # present and still future-dated.
         db = Database(settings.database_path)
         db.valid_frozen_send_approval(
-            settings.warmy_campaign_id,
-            settings.warmy_campaign_manifest_hash,
+            campaign_id,
+            selected_campaign_manifest_hash,
             require_future=True,
         )
         warmy = WarmyClient(settings)
         try:
             _json(
                 warmy.start_campaign(
-                    settings.warmy_campaign_id, "aether-campaign-start-v1"
+                    campaign_id, f"aether-campaign-start-{args.kind}-v1"
                 )
             )
         finally:

@@ -43,6 +43,7 @@ from .providers import (
     NewsApiAdapter,
     ProviderAdapter,
     ProviderRecord,
+    SalesNavigatorAdapter,
 )
 from .qualification import QualificationService
 from .research import ContactResearchService, DecisionMakerService
@@ -74,6 +75,7 @@ class PipelineOptions:
     newsapi: bool = False
     apify: bool = False
     mapsdata: bool = False
+    sales_navigator: bool = False
     costar: bool = False
     treg_go: bool = False
     treg_budget_usd: float = 5.0
@@ -115,6 +117,7 @@ class PipelineRunner:
         newsapi_adapter: ProviderAdapter | None = None,
         apify_adapter: ProviderAdapter | None = None,
         mapsdata_adapter: ProviderAdapter | None = None,
+        sales_navigator_adapter: ProviderAdapter | None = None,
         costar_adapter: ProviderAdapter | None = None,
     ):
         if options.resume and not options.run_id:
@@ -128,6 +131,7 @@ class PipelineRunner:
         self.newsapi_adapter = newsapi_adapter
         self.apify_adapter = apify_adapter
         self.mapsdata_adapter = mapsdata_adapter
+        self.sales_navigator_adapter = sales_navigator_adapter
         self.costar_adapter = costar_adapter
         self.state = StateStore(options.db_path)
         self.state.migrate()
@@ -149,6 +153,7 @@ class PipelineRunner:
             "newsapi": options.newsapi,
             "apify": options.apify,
             "mapsdata": options.mapsdata,
+            "sales_navigator": options.sales_navigator,
             "costar": options.costar,
             "treg_go": options.treg_go,
             "treg_budget_usd": options.treg_budget_usd,
@@ -342,6 +347,9 @@ class PipelineRunner:
             batches.append(self._discover_provider(adapter))
         if self.options.mapsdata:
             adapter = self.mapsdata_adapter or MapsDataAdapter()
+            batches.append(self._discover_provider(adapter))
+        if self.options.sales_navigator:
+            adapter = self.sales_navigator_adapter or SalesNavigatorAdapter()
             batches.append(self._discover_provider(adapter))
         if self.options.costar:
             adapter = self.costar_adapter or CostarTenantAdapter()
