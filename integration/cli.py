@@ -728,7 +728,7 @@ def main() -> int:
         return 0
     if args.command == "start-campaign":
         source_provider = "mapsdata" if args.kind == "maps-sales" else ""
-        campaign_id, campaign_manifest_hash = settings.warmy_campaign_for_source(
+        campaign_id, selected_campaign_manifest_hash = settings.warmy_campaign_for_source(
             source_provider
         )
         if not args.apply:
@@ -754,7 +754,7 @@ def main() -> int:
         db = Database(settings.database_path)
         db.valid_frozen_send_approval(
             campaign_id,
-            campaign_manifest_hash,
+            selected_campaign_manifest_hash,
             require_future=True,
         )
         warmy = WarmyClient(settings)

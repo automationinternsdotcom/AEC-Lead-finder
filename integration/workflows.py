@@ -362,9 +362,6 @@ class SalesWorkflows:
     def sync_sequence(self, payload: dict[str, Any]) -> None:
         sequence = OutreachSequenceSync.model_validate(payload["sequence"])
         recipient = RecipientSync.model_validate(payload["recipient"])
-        campaign_id, campaign_manifest_hash = self._warmy_campaign(
-            sequence.source_provider or recipient.source_provider
-        )
         list_id = self._warmy_list_id()
         if recipient.recipient_id != sequence.primary_recipient_id:
             raise ValueError("sequence primary recipient payload mismatch")
@@ -634,6 +631,13 @@ class SalesWorkflows:
             or (sequence.get("payload") or {}).get("source_provider")
             or ""
         )
+        guard = inspect_recipient_guard(
+            self.db, sequence["company_id"], recipient["normalized_email"]
+        )
+        if guard.identity_exclusion:
+            raise ActivationBlocked("recipient belongs to a different company")
+        if guard.review_hold:
+            raise ActivationBlocked("recipient is held for accuracy review")
         campaign_id, campaign_manifest_hash = self._warmy_campaign(source_provider)
         if not self.db.valid_approval_for_sequence(
             sequence_id,
@@ -642,13 +646,6 @@ class SalesWorkflows:
             require_rendered=getattr(self.settings, "campaign_start_enabled", False),
         ):
             raise ActivationBlocked("sequence has no matching immutable approval batch and frozen send approval")
-        guard = inspect_recipient_guard(
-            self.db, sequence["company_id"], recipient["normalized_email"]
-        )
-        if guard.identity_exclusion:
-            raise ActivationBlocked("recipient belongs to a different company")
-        if guard.review_hold:
-            raise ActivationBlocked("recipient is held for accuracy review")
         prospect_id = str(recipient.get("warmy_prospect_id") or "")
         if not prospect_id:
             raise WorkflowRetry("Warmy prospect has not been created")

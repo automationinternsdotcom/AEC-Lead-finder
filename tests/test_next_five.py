@@ -8,7 +8,7 @@ from integration.next_five import build_next_five_preview
 
 def test_review_export_becomes_non_authorizing_exact_five_preview(tmp_path):
     source = json.loads(
-        Path("/Users/openclaw/Code/lead-enrichment/data/warmysender/exports/next-five-review-20260916.json").read_text()
+        (Path(__file__).parent / "fixtures" / "next-five-review-20260916.json").read_text()
     )
     preview = build_next_five_preview(source)
     assert preview["approval_status"] == "HOLD"

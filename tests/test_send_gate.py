@@ -276,7 +276,7 @@ def test_database_persists_and_binds_the_frozen_approval_to_recipient(tmp_path):
         campaign_id="campaign-1", campaign_manifest_hash="campaign-hash", messages=rows,
         first_send_at=datetime(2026, 9, 16, 8, tzinfo=EASTERN),
     )
-    now = datetime(2026, 9, 16, 12, 30, tzinfo=UTC)
+    now = datetime.now(UTC)
     db.save_approval_batch(
         ApprovalBatch(
             batch_id="batch-1",
@@ -346,7 +346,7 @@ def test_received_evidence_requires_both_provider_mime_bodies(tmp_path):
     }
     db.save_render_evidence("campaign-1", evidence)
     assert db.valid_frozen_send_approval(
-        "campaign-1", "campaign-hash", now=datetime(2026, 9, 16, 13, 0, 1, tzinfo=UTC), require_future=True
+        "campaign-1", "campaign-hash", now=now + timedelta(minutes=30), require_future=True
     )["status"] == "verified"
     evidence["samples"][0]["actual_body_html"] = None
     with pytest.raises(ActivationBlocked, match="approved literal payload"):
