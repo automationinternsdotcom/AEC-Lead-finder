@@ -2,7 +2,7 @@
 
 ## Article discovery and Jon's internal report
 
-The canonical daily workflow is
+The canonical daily workflow runs every calendar day, including weekends, and is
 `automation/daily-lead-pipeline.md`. It uses Codex/Computer Use with the
 authenticated Chrome profile for public research and Gmail for one internal
 report from `akhil@automationinterns.com` to `jon@automationinterns.com`. It

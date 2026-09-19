@@ -8,7 +8,8 @@ headless model client.
 
 ## Run contract
 
-1. Read `news_websites.csv` and require exactly 125 data rows before changing
+1. Run every calendar day, including Saturdays and Sundays. Read
+   `news_websites.csv` and require exactly 125 data rows before changing
    any output.
 2. For every pending Phoenix calendar date, inspect all 125 public sources.
    Use direct pages, RSS/Atom, sitemaps, and public records; do not bypass
