@@ -12,26 +12,15 @@ deterministic source preflight is:
 python3 scripts/validate_source_list.py
 ```
 
-Validated Codex-produced sales handoffs are imported with
-`bash run-daily-ingest.sh --handoff /absolute/path/to/sales_handoff.json`.
-
 ## Architecture
 
-This repo follows the same `scout/` architecture as
-[`gps-grok-leadfinder`](https://github.com/automationinternsdotcom/gps-grok-leadfinder).
-The one intentional difference is discovery:
-
-- GPS discovers articles through Google News and provider expansion.
-- Aether AEC discovers articles from the curated root file `news_websites.csv`.
-
-The retained V2 pipeline writes compatibility CSV/HTML outputs plus typed JSONL, raw
-research artifacts, stage state, and an auditable run manifest. Provider writes are
-off by default. Model research is performed in the authenticated Codex/Computer-Use
-workflow; this repository does not call a model API, require a Grok key, or use
-CLIProxy. When `AETHER_INTEGRATION_ENABLED=true` on the persistent Mac, a successful
-V2 export enqueues a typed, hashed company/event/recipient/sequence handoff for the
-separate sales worker.
-Comparison delivery remains a separate exactly-once Gmail command.
+The production article pipeline is `scout/github_article_pipeline.py`, run only by
+GitHub Actions. It scans all 125 curated websites over HTTP, qualifies source
+content deterministically, enriches through TREG data endpoints, syncs research-only
+Pipedrive Leads, and delivers fixed-recipient Gmail reports from Akhil's mailbox.
+No model API, Grok, CLIProxy, browser research, Codex Automation, or Mac scheduler
+is part of this runtime. See [README-AUTOMATION.md](README-AUTOMATION.md) for secrets,
+report routing, and controlled testing. Historical sales modules below are separate.
 
 ## Folder Layout
 
@@ -45,7 +34,7 @@ Comparison delivery remains a separate exactly-once Gmail command.
 | `.github/workflows/nightly-article-pipeline.yml` | Scheduled GitHub discovery, TREG enrichment, Pipedrive sync, and internal Gmail report. |
 | `.github/workflows/nightly-scout.yml` | Manual source-list preflight only. |
 | `check.sh` | Fast local self-checks for the `scout/` modules. |
-| `run-nightly.sh` | Local LaunchAgent wrapper around `uv run scout/pipeline.py`. |
+| `run-nightly.sh` | Retired wrapper; refuses local nightly runs. |
 | `scout/v2/` | Typed services, SQLite state, artifacts, migration, comparison, and promotion gates. |
 | `integration/` | Mac-local Warmy, Gmail, Pipedrive, webhook, and SQLite worker service. |
 | `infra/macos/` | LaunchAgent templates and Mac-local operating instructions. |
