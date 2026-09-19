@@ -309,6 +309,8 @@ class SalesWorkflows:
         lead_fields = self._deal_fields(
             aether_lead_event_id=event.lead_event_id,
             canonical_company_id=event.company_id,
+            source_provider=event.source_provider or "article",
+            lead_source=_lead_source_category(event.source_provider),
             event_role=event.event_role.value,
             outreach_state=(
                 "anchor_ready"
@@ -325,7 +327,11 @@ class SalesWorkflows:
                 event.model_dump(mode="json"),
                 lambda: {
                     "id": self.pipedrive.create_lead(
-                        f"{event.organization_name} — {event.event}"[:255],
+                        _event_lead_title(
+                            event.organization_name,
+                            event.event,
+                            event.source_provider,
+                        ),
                         None,
                         int(organization_id),
                         self.settings.pipedrive_jordan_user_id,
@@ -826,6 +832,8 @@ class SalesWorkflows:
             aether_lead_event_id=contact.lead_event_id,
             aether_outreach_id=contact.outreach_id,
             aether_contact_candidate_id=contact.source_contact_candidate_id,
+            source_provider=contact.source_provider or "article",
+            lead_source=_lead_source_category(contact.source_provider),
             outreach_state="suppressed"
             if self.db.is_suppressed(contact.email)
             else "created",
@@ -1870,7 +1878,26 @@ def _split_name(name: str) -> tuple[str, str]:
 
 def _lead_title(contact: ContactSync) -> str:
     subject = contact.event or contact.organization_name
-    return f"{contact.organization_name} — {contact.person_name} — {subject}"[:255]
+    return _event_lead_title(
+        contact.organization_name,
+        f"{contact.person_name} — {subject}",
+        contact.source_provider,
+    )
+
+
+def _lead_source_category(source_provider: str) -> str:
+    normalized = str(source_provider or "").strip().casefold().replace("-", "_")
+    if normalized in {"mapsdata", "sales_navigator", "salesnav"}:
+        return normalized
+    return "article"
+
+
+def _event_lead_title(
+    organization_name: str, subject: str, source_provider: str = ""
+) -> str:
+    category = _lead_source_category(source_provider)
+    label = "Article lead" if category == "article" else f"{category} lead"
+    return f"{label} — {organization_name} — {subject}"[:255]
 
 
 def _verification_status(data: dict[str, Any]) -> VerificationStatus:

@@ -1,99 +1,23 @@
-name: nightly scout
+name: source-list preflight
 
 on:
   workflow_dispatch:
-    inputs:
-      max_articles:
-        description: "Maximum new articles to judge. Use 0 for no limit."
-        required: false
-        default: "0"
-      workers:
-        description: "Parallel workers."
-        required: false
-        default: "5"
-      apollo_go:
-        description: "Spend Apollo credits."
-        required: false
-        type: boolean
-        default: false
-  schedule:
-    - cron: "0 13 * * *"
 
 jobs:
-  scout:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     permissions:
       contents: read
-      actions: write
-    env:
-      CLIPROXY_BASE_URL: ${{ secrets.CLIPROXY_BASE_URL }}
-      CLIPROXY_API_KEY: ${{ secrets.CLIPROXY_API_KEY }}
-      GROK_MODEL: ${{ vars.GROK_MODEL || 'grok-4.3' }}
-      EXTRACTOR_MODEL: ${{ vars.EXTRACTOR_MODEL || 'grok-4.3' }}
-      APOLLO_API_KEY: ${{ secrets.APOLLO_API_KEY }}
-      APOLLO_WEBHOOK_URL: ${{ secrets.APOLLO_WEBHOOK_URL }}
-      DB_PATH: scout.db
-      RESULTS_DIR: results
-      NEWS_WEBSITES_CSV: news_websites.csv
-      MAX_ARTICLES: ${{ github.event.inputs.max_articles || '0' }}
-      WORKERS: ${{ github.event.inputs.workers || '5' }}
-      APOLLO_GO_INPUT: ${{ github.event.inputs.apollo_go || '' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Restore scout database
-        uses: actions/cache/restore@v4
-        with:
-          path: scout.db
-          key: scout-db-v2-3-production-${{ github.run_id }}
-          restore-keys: |
-            scout-db-v2-3-production-
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: Validate required secrets
+      - name: Validate the 125-site source list
         run: |
-          test -n "$CLIPROXY_BASE_URL" || { echo "Missing secret CLIPROXY_BASE_URL"; exit 1; }
-          test -n "$CLIPROXY_API_KEY" || { echo "Missing secret CLIPROXY_API_KEY"; exit 1; }
+          python3 scripts/validate_source_list.py
 
-      - name: Run AEC scout pipeline
-        run: |
-          APOLLO_ARGS=""
-          if [ "$APOLLO_GO_INPUT" = "true" ]; then
-            test -n "$APOLLO_API_KEY" || { echo "Missing secret APOLLO_API_KEY for requested Apollo spend"; exit 1; }
-            APOLLO_ARGS="--apollo-go"
-          elif [ "${{ github.event_name }}" = "schedule" ] && [ -n "$APOLLO_API_KEY" ]; then
-            APOLLO_ARGS="--apollo-go"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "APOLLO_API_KEY is not configured; running scheduled scout without Apollo fallback."
-          fi
-          uv run scout/pipeline.py \
-            --workers "$WORKERS" \
-            --max-articles "$MAX_ARTICLES" \
-            $APOLLO_ARGS
-
-      - name: Upload lead results
-        if: always()
+      - name: Upload source-list evidence
         uses: actions/upload-artifact@v4
         with:
-          name: aec-lead-results-${{ github.run_id }}
-          path: |
-            results/
-            scout/logs/
-          if-no-files-found: ignore
+          name: aether-source-list-${{ github.run_id }}
+          path: news_websites.csv
           retention-days: 14
-
-      - name: Save scout database
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: scout.db
-          key: scout-db-v2-3-production-${{ github.run_id }}

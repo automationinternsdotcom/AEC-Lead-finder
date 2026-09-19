@@ -1,4 +1,4 @@
-"""Resumable daily Grok discovery and run-scoped Pipedrive/Warmy ingestion.
+"""Run-scoped Pipedrive/Warmy ingestion for a validated Codex handoff.
 
 Run with the production env and absolute DB_PATH, RESULTS_DIR and
 AETHER_SALES_DB_PATH. --enroll-draft is standing authorization to append each
@@ -25,7 +25,7 @@ from .history import reconcile_history
 from .worker import run_once
 
 REPO = Path(__file__).resolve().parents[1]
-CHECKPOINT = "daily:grok-pipedrive-warmy:v1"
+CHECKPOINT = "daily:codex-pipedrive-warmy:v1"
 
 
 def next_window(checkpoint: dict, today: date) -> tuple[str, str]:
@@ -162,7 +162,7 @@ def main() -> int:
                 command.append("--resume")
             if args.retry_review:
                 command.append("--retry-review")
-            env = dict(os.environ, AETHER_INTEGRATION_ENABLED="false", GROK_MODEL="grok-4.3", EXTRACTOR_MODEL="grok-4.3")
+            env = dict(os.environ, AETHER_INTEGRATION_ENABLED="false")
             completed = subprocess.run(command, cwd=REPO, env=env)
             if not manifest_path.exists():
                 raise RuntimeError("Pipeline produced no manifest")

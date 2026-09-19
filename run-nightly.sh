@@ -1,33 +1,13 @@
 #!/bin/bash
-# Aether nightly lead pipeline.
-# GPS-style headless run: scout/pipeline.py does discovery, enrichment, scoring,
-# and HTML generation. No Codex Desktop or browser handoff is required.
+# Aether no-key source preflight.
+# The daily Codex automation owns browser research, enrichment, and the internal
+# report. This wrapper is intentionally limited to deterministic validation so a
+# legacy LaunchAgent cannot silently fall back to an API/model runner.
 
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 RUNNER="${RUNNER:-$(cd "$(dirname "$0")" && pwd)}"
-AETHER_ENV="${AETHER_ENV:-$RUNNER/.env}"
-LOG_DIR="$RUNNER/logs"
-TS="$(date +%Y%m%d-%H%M%S)"
-LOG="$LOG_DIR/run-$TS.log"
-mkdir -p "$LOG_DIR"
-exec >>"$LOG" 2>&1
-
-echo "===== Aether scout nightly run: $(date) ====="
-echo "runner=$RUNNER env=$AETHER_ENV"
-
-UV_ENV_ARGS=()
-if [ -f "$AETHER_ENV" ]; then
-  UV_ENV_ARGS=(--env-file "$AETHER_ENV")
-else
-  echo "WARN: env file not found: $AETHER_ENV"
-fi
-
 cd "$RUNNER"
-set +e
-uv run "${UV_ENV_ARGS[@]}" scout/pipeline.py "$@"
-RC=$?
-set -e
-echo "===== scout pipeline exit=$RC done: $(date) ====="
-exit "$RC"
+python3 scripts/validate_source_list.py
+echo "Source preflight complete; use the Codex daily automation for browser research and Jon's internal report."

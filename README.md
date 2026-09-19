@@ -4,11 +4,16 @@ Aether AEC Lead Finder is a GPS-style lead pipeline for Aether Facility Services
 It finds Arizona commercial-real-estate activity, enriches each qualified lead with
 decision makers and contact data, scores the list, and builds a daily HTML lead email.
 
-The canonical runner is:
+The canonical daily workflow is documented in
+[`automation/daily-lead-pipeline.md`](automation/daily-lead-pipeline.md). The
+deterministic source preflight is:
 
 ```bash
-uv run scout/pipeline.py
+python3 scripts/validate_source_list.py
 ```
+
+Validated Codex-produced sales handoffs are imported with
+`bash run-daily-ingest.sh --handoff /absolute/path/to/sales_handoff.json`.
 
 ## Architecture
 
@@ -19,10 +24,12 @@ The one intentional difference is discovery:
 - GPS discovers articles through Google News and provider expansion.
 - Aether AEC discovers articles from the curated root file `news_websites.csv`.
 
-The active V2 pipeline writes compatibility CSV/HTML outputs plus typed JSONL, raw
-responses, stage state, and an auditable run manifest. Provider writes are off by
-default. When `AETHER_INTEGRATION_ENABLED=true` on the persistent Mac, a successful V2
-export enqueues a typed, hashed company/event/recipient/sequence handoff for the
+The retained V2 pipeline writes compatibility CSV/HTML outputs plus typed JSONL, raw
+research artifacts, stage state, and an auditable run manifest. Provider writes are
+off by default. Model research is performed in the authenticated Codex/Computer-Use
+workflow; this repository does not call a model API, require a Grok key, or use
+CLIProxy. When `AETHER_INTEGRATION_ENABLED=true` on the persistent Mac, a successful
+V2 export enqueues a typed, hashed company/event/recipient/sequence handoff for the
 separate sales worker.
 Comparison delivery remains a separate exactly-once Gmail command.
 
@@ -48,7 +55,7 @@ Comparison delivery remains a separate exactly-once Gmail command.
 
 - Python 3.12 or newer
 - `uv`
-- A Responses-compatible API endpoint with access to Grok and web search
+- Authenticated Codex/Computer Use and Chrome for public article research
 - `news_websites.csv`
 - Apollo.io API key if you want Apollo fallback enrichment
 - MapsData API key or CSV export if you want MapsData lead ingestion
@@ -60,10 +67,9 @@ Comparison delivery remains a separate exactly-once Gmail command.
 Local runs read `.env` from the repository root. Start from `.env.example`:
 
 ```env
-CLIPROXY_BASE_URL=http://localhost:8317/v1
-CLIPROXY_API_KEY=your-key-here
-GROK_MODEL=grok-4.3
-EXTRACTOR_MODEL=grok-4.3
+# The daily Codex workflow supplies research in-session; no model API settings.
+AETHER_MODEL_PROVIDER=codex-ui
+AETHER_MODEL_NAME=codex-ui
 DB_PATH=scout.db
 RESULTS_DIR=results
 NEWS_WEBSITES_CSV=news_websites.csv
@@ -84,33 +90,21 @@ SALES_NAVIGATOR_CSV=
 COSTAR_TENANT_CSV=
 ```
 
-Use `http://localhost:8317/v1` only when the run is on a Mac or server with a
-local Cliproxy/CLIProxy-compatible service listening on that port. GitHub-hosted
-Actions cannot reach that loopback service. For the GitHub nightly workflow with
-a Grok API key, set `CLIPROXY_BASE_URL` to `https://api.x.ai/v1` and store the
-Grok API key in `CLIPROXY_API_KEY`.
-
 Do not commit `.env` or any real API key.
 
-## GitHub Secrets
+## Daily no-key workflow
 
-The production GitHub workflow reads these secrets:
+`automation/daily-lead-pipeline.md` is the canonical daily contract. It validates
+all 125 rows in `news_websites.csv`, uses Codex/Computer Use for public-site
+discovery and browser research, writes validated article-lead artifacts under
+`results/YYYY-MM-DD/`, upserts eligible rows into Pipedrive Leads, and sends one
+structured internal report from `akhil@automationinterns.com` to
+`jon@automationinterns.com`. It never sends prospect outreach. The
+separate Warmy campaigns remain draft/paused until their existing send gate is
+explicitly approved.
 
-| Secret | Required | Used for |
-|---|---:|---|
-| `CLIPROXY_BASE_URL` | Yes | Responses API endpoint. Use `https://api.x.ai/v1` for GitHub-hosted Actions with a Grok key. |
-| `CLIPROXY_API_KEY` | Yes | Responses API auth. |
-| `APOLLO_API_KEY` | No | Apollo fallback when `--apollo-go` is enabled. |
-| `APOLLO_WEBHOOK_URL` | No | Apollo phone reveal webhook if phone reveal is added. |
-
-Optional repository variables:
-
-| Variable | Default |
-|---|---|
-| `GROK_MODEL` | `grok-4.3` |
-| `EXTRACTOR_MODEL` | `grok-4.3` |
-
-Add the Apollo key in GitHub only if Apollo fallback should spend credits:
+Apollo remains an optional, explicitly authorized enrichment provider. Add its
+key only if Apollo fallback should spend credits:
 
 `Settings -> Secrets and variables -> Actions -> New repository secret -> APOLLO_API_KEY`
 
@@ -122,7 +116,7 @@ Install dependencies:
 uv sync
 ```
 
-### Raw lead intake before Grok
+### Raw lead intake before browser enrichment
 
 Use `scout.raw_leads` when a provider export should be collected first and
 enriched later. It accepts repeated `NAME=CSV` inputs for MapsData, WarmySender,
