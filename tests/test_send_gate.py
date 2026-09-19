@@ -314,7 +314,7 @@ def test_received_evidence_requires_both_provider_mime_bodies(tmp_path):
         campaign_id="campaign-1", campaign_manifest_hash="campaign-hash", messages=[row],
         first_send_at=datetime(2026, 9, 16, 8, tzinfo=EASTERN),
     )
-    now = datetime(2026, 9, 16, 12, 30, tzinfo=UTC)
+    now = datetime.now(UTC)
     db.save_approval_batch(ApprovalBatch(
         batch_id="batch-1", campaign_id="campaign-1", campaign_manifest_hash="campaign-hash",
         sequence_ids=["sequence-1"], merge_hashes={"sequence-1": "merge-sequence-1"},
