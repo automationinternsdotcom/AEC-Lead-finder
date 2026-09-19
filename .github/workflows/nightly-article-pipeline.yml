@@ -1,0 +1,94 @@
+name: nightly article lead pipeline
+
+on:
+  schedule:
+    # 03:00 America/Phoenix year-round (10:00 UTC).
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: aether-nightly-article-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  discover-enrich-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AETHER_GITHUB_PIPELINE_ENABLED: "true"
+      GITHUB_ARTICLE_LEAD_TARGET: "30"
+      TREG_TOKEN: ${{ secrets.TREG_TOKEN }}
+      TREG_BUDGET_USD: "5"
+      PIPEDRIVE_API_TOKEN: ${{ secrets.PIPEDRIVE_API_TOKEN }}
+      PIPEDRIVE_DOMAIN: ${{ secrets.PIPEDRIVE_DOMAIN }}
+      PIPEDRIVE_JORDAN_USER_ID: ${{ secrets.PIPEDRIVE_JORDAN_USER_ID }}
+      PIPEDRIVE_DEAL_FIELDS: ${{ secrets.PIPEDRIVE_DEAL_FIELDS }}
+      GMAIL_SERVICE_ACCOUNT_JSON: ${{ secrets.GMAIL_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Check out pipeline
+        uses: actions/checkout@v4
+
+      - name: Initialize durable state directories
+        run: mkdir -p .github-state results
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Restore resumable pipeline state
+        uses: actions/cache/restore@v4
+        with:
+          path: .github-state
+          key: aether-github-state-${{ github.run_id }}
+          restore-keys: |
+            aether-github-state-
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Verify required pipeline secrets
+        shell: bash
+        run: |
+          for name in TREG_TOKEN PIPEDRIVE_API_TOKEN PIPEDRIVE_DOMAIN PIPEDRIVE_JORDAN_USER_ID PIPEDRIVE_DEAL_FIELDS GMAIL_SERVICE_ACCOUNT_JSON; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required repository secret: ${name}"
+              exit 1
+            fi
+          done
+
+      - name: Validate the 125-site source list
+        run: uv run python scripts/validate_source_list.py
+
+      - name: Discover, enrich, sync, and send the internal report
+        run: |
+          until_date="$(date -u +%F)"
+          since_date="$(date -u -d 'yesterday' +%F)"
+          uv run python -m scout.github_article_pipeline \
+            --since "$since_date" \
+            --until "$until_date" \
+            --sources news_websites.csv \
+            --state-dir .github-state \
+            --results-dir results
+
+      - name: Upload pipeline artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-article-pipeline-${{ github.run_id }}
+          path: |
+            results/
+            .github-state/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Save resumable pipeline state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .github-state
+          key: aether-github-state-${{ github.run_id }}
