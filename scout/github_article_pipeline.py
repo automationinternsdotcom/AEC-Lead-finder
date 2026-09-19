@@ -58,6 +58,8 @@ CSV_FIELDS = [
     "linkedin",
     "contact_provider",
     "contact_verification",
+    "pipedrive_lead_id",
+    "pipedrive_status",
 ]
 
 ARIZONA_TERMS = (
@@ -143,6 +145,8 @@ class ArticleLead:
     linkedin: str = ""
     contact_provider: str = ""
     contact_verification: str = ""
+    pipedrive_lead_id: str = ""
+    pipedrive_status: str = ""
     enrichment_error: str = ""
 
     def csv_row(self) -> dict[str, str | int]:
@@ -364,7 +368,7 @@ class PipedriveArticleWriter:
         data = self._request("POST", "v2/organizations", json={"name": name, "owner_id": self.owner_id, "address": {"value": location}})
         return int(data["id"])
 
-    def upsert(self, lead: ArticleLead) -> str:
+    def upsert(self, lead: ArticleLead) -> tuple[str, str]:
         org_id = self._organization(lead.company, lead.location)
         values = {
             "aether_lead_event_id": lead.lead_id,
@@ -380,10 +384,12 @@ class PipedriveArticleWriter:
         if existing is None:
             data = self._request("POST", "v1/leads", json=payload)
             lead_id = str(data["id"])
+            status = "created"
         else:
             self._request("PATCH", f"v1/leads/{existing}", json=payload)
             lead_id = str(existing)
-        return lead_id
+            status = "updated"
+        return lead_id, status
 
 
 class GmailReportSender:
@@ -444,11 +450,16 @@ def render_report(leads: list[ArticleLead], *, source_count: int, source_errors:
                 html.escape(lead.contact_name), html.escape(lead.contact_title), html.escape(lead.email), html.escape(lead.phone), html.escape(lead.linkedin)
             ) if value
         ) or "No verified contact found"
+        crm = html.escape(
+            f"{lead.pipedrive_lead_id} ({lead.pipedrive_status})"
+            if lead.pipedrive_lead_id
+            else "Not synced"
+        )
         rows.append(
             "<tr>"
             f"<td>{lead.score}</td><td><a href=\"{html.escape(lead.source_url, quote=True)}\">{html.escape(lead.company)}</a><br>{html.escape(lead.property)}</td>"
             f"<td>{html.escape(lead.event)}</td><td>{html.escape(lead.location)}</td><td>{html.escape(lead.summary)}</td>"
-            f"<td>{html.escape(lead.service_angle)}</td><td>{contact}</td>"
+            f"<td>{html.escape(lead.service_angle)}</td><td>{contact}</td><td>{crm}</td>"
             "</tr>"
         )
     shortfall = max(0, TARGET_LEADS - len(leads))
@@ -460,7 +471,7 @@ def render_report(leads: list[ArticleLead], *, source_count: int, source_errors:
         f"Shortfall versus target of {TARGET_LEADS}: {shortfall}. Source errors: {source_errors}.</p>"
         "<p><strong>No prospect outreach was sent.</strong> These are internal article leads for review and Pipedrive tracking.</p>"
         "<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\"><thead><tr>"
-        "<th>Score</th><th>Company / property</th><th>Event</th><th>Location</th><th>Source summary</th><th>Service angle</th><th>Verified contact</th>"
+        "<th>Score</th><th>Company / property</th><th>Event</th><th>Location</th><th>Source summary</th><th>Service angle</th><th>Verified contact</th><th>Pipedrive lead</th>"
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></body></html>"
     )
 
@@ -553,7 +564,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     pipedrive_ids: dict[str, str] = {}
     try:
         for lead in leads:
-            pipedrive_ids[lead.lead_id] = writer.upsert(lead)
+            pipedrive_id, pipedrive_status = writer.upsert(lead)
+            lead.pipedrive_lead_id = pipedrive_id
+            lead.pipedrive_status = pipedrive_status
+            pipedrive_ids[lead.lead_id] = pipedrive_id
     finally:
         writer.close()
     output_dir = results_dir / stamp

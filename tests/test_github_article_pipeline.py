@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from scout.github_article_pipeline import (
     dedupe_leads,
     qualify_candidate,
+    render_report,
     validate_source_list,
 )
 
@@ -68,3 +69,22 @@ def test_source_list_requires_exactly_125_rows(tmp_path):
     )
 
     assert len(validate_source_list(path)) == 125
+
+
+def test_report_includes_crm_id_and_no_prospect_send_statement():
+    lead = qualify_candidate(
+        _candidate(),
+        "Arizona commercial property coverage: the facility will open in Phoenix after tenant improvements.",
+        date(2026, 9, 18),
+        date(2026, 9, 18),
+    )
+    assert lead is not None
+    lead.pipedrive_lead_id = "lead-123"
+    lead.pipedrive_status = "created"
+
+    report = render_report(
+        [lead], source_count=125, source_errors=0, since=date(2026, 9, 18), until=date(2026, 9, 18)
+    )
+
+    assert "lead-123 (created)" in report
+    assert "No prospect outreach was sent." in report
