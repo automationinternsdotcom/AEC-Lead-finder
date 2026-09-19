@@ -503,6 +503,21 @@ def require_github_configuration() -> dict[str, str]:
         raise RuntimeError("PIPEDRIVE_DEAL_FIELDS must be valid JSON") from exc
     if not isinstance(fields, dict):
         raise RuntimeError("PIPEDRIVE_DEAL_FIELDS must be a JSON object")
+    try:
+        owner_id = int(os.environ["PIPEDRIVE_JORDAN_USER_ID"])
+    except ValueError as exc:
+        raise RuntimeError("PIPEDRIVE_JORDAN_USER_ID must be an integer") from exc
+    if owner_id <= 0:
+        raise RuntimeError("PIPEDRIVE_JORDAN_USER_ID must be positive")
+    try:
+        gmail = json.loads(os.environ["GMAIL_SERVICE_ACCOUNT_JSON"])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GMAIL_SERVICE_ACCOUNT_JSON must be valid JSON") from exc
+    required_gmail_keys = {"client_email", "private_key", "token_uri"}
+    if not isinstance(gmail, dict) or not required_gmail_keys <= set(gmail):
+        raise RuntimeError(
+            "GMAIL_SERVICE_ACCOUNT_JSON must contain client_email, private_key, and token_uri"
+        )
     return {str(key): str(value) for key, value in fields.items()}
 
 

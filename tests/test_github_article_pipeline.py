@@ -1,11 +1,15 @@
 from datetime import UTC, date, datetime
 from dataclasses import replace
+import json
 from types import SimpleNamespace
+
+import pytest
 
 from scout.github_article_pipeline import (
     dedupe_leads,
     qualify_candidate,
     render_report,
+    require_github_configuration,
     validate_source_list,
 )
 
@@ -88,3 +92,19 @@ def test_report_includes_crm_id_and_no_prospect_send_statement():
 
     assert "lead-123 (created)" in report
     assert "No prospect outreach was sent." in report
+
+
+def test_github_configuration_rejects_malformed_gmail_credentials(monkeypatch):
+    values = {
+        "TREG_TOKEN": "token",
+        "PIPEDRIVE_API_TOKEN": "pipedrive",
+        "PIPEDRIVE_DOMAIN": "example.pipedrive.com",
+        "PIPEDRIVE_JORDAN_USER_ID": "11380767",
+        "PIPEDRIVE_DEAL_FIELDS": json.dumps({"article_url": "field"}),
+        "GMAIL_SERVICE_ACCOUNT_JSON": "not-json",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(RuntimeError, match="GMAIL_SERVICE_ACCOUNT_JSON must be valid JSON"):
+        require_github_configuration()
