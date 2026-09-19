@@ -308,13 +308,16 @@ def test_received_evidence_requires_both_provider_mime_bodies(tmp_path):
 
     _seed(db)
     db.update_recipient("recipient-1", verification_status="valid", warmy_prospect_id="prospect-1")
-    row = [item for item in _messages() if item["step_index"] == 0][0]
+    release_start = datetime.now(UTC).astimezone(EASTERN).replace(
+        hour=8, minute=0, second=0, microsecond=0
+    )
+    row = [item for item in _messages(first_send_at=release_start) if item["step_index"] == 0][0]
     row.update(sequence_id="sequence-1", recipient_id="recipient-1", recipient_email="jane1@acme.example", mailbox_id="mailbox-1")
     manifest = build_frozen_manifest(
         campaign_id="campaign-1", campaign_manifest_hash="campaign-hash", messages=[row],
-        first_send_at=datetime(2026, 9, 16, 8, tzinfo=EASTERN),
+        first_send_at=release_start,
     )
-    now = datetime.now(UTC)
+    now = release_start + timedelta(minutes=15)
     db.save_approval_batch(ApprovalBatch(
         batch_id="batch-1", campaign_id="campaign-1", campaign_manifest_hash="campaign-hash",
         sequence_ids=["sequence-1"], merge_hashes={"sequence-1": "merge-sequence-1"},
