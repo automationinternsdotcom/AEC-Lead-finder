@@ -474,9 +474,31 @@ def _write_csv(path: Path, leads: list[ArticleLead]) -> None:
             writer.writerow({field: getattr(lead, field, "") for field in CSV_FIELDS})
 
 
+def require_github_configuration() -> dict[str, str]:
+    required = (
+        "TREG_TOKEN",
+        "PIPEDRIVE_API_TOKEN",
+        "PIPEDRIVE_DOMAIN",
+        "PIPEDRIVE_JORDAN_USER_ID",
+        "PIPEDRIVE_DEAL_FIELDS",
+        "GMAIL_SERVICE_ACCOUNT_JSON",
+    )
+    missing = [name for name in required if not os.environ.get(name, "").strip()]
+    if missing:
+        raise RuntimeError("missing GitHub pipeline configuration: " + ", ".join(missing))
+    try:
+        fields = json.loads(os.environ["PIPEDRIVE_DEAL_FIELDS"])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("PIPEDRIVE_DEAL_FIELDS must be valid JSON") from exc
+    if not isinstance(fields, dict):
+        raise RuntimeError("PIPEDRIVE_DEAL_FIELDS must be a JSON object")
+    return {str(key): str(value) for key, value in fields.items()}
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if os.environ.get("AETHER_GITHUB_PIPELINE_ENABLED", "").casefold() not in {"1", "true", "yes", "on"}:
         raise RuntimeError("AETHER_GITHUB_PIPELINE_ENABLED must be true")
+    pipedrive_fields = require_github_configuration()
     source_path = Path(args.sources).resolve()
     sources = validate_source_list(source_path)
     stamp = args.until
@@ -526,7 +548,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         domain=os.environ.get("PIPEDRIVE_DOMAIN", "").strip(),
         token=os.environ.get("PIPEDRIVE_API_TOKEN", "").strip(),
         owner_id=int(os.environ.get("PIPEDRIVE_JORDAN_USER_ID", "11380767")),
-        fields=json.loads(os.environ.get("PIPEDRIVE_DEAL_FIELDS", "{}")),
+        fields=pipedrive_fields,
     )
     pipedrive_ids: dict[str, str] = {}
     try:
