@@ -17,10 +17,12 @@ python3 scripts/validate_source_list.py
 ```
 
 The check must report exactly 125 websites. The Codex run then processes every
-pending Phoenix calendar date and attempts all 125 sources. It saves validated
+pending Phoenix calendar date and attempts all 125 sources, targeting at least
+30 unique qualified article leads per calendar day. It saves validated
 article-lead artifacts, a sales handoff, and a Gmail sent marker under the
-run/state contracts in the repository. Ambiguous or failed work stays
-retryable.
+run/state contracts in the repository. If fewer than 30 valid unique leads
+exist, the report states the shortfall; the workflow never fabricates or
+duplicates leads. Ambiguous or failed work stays retryable.
 
 The report to Jon is separate from prospect outreach. It must say that no
 external outreach was sent. Warmy enrollment and campaign activation remain

@@ -14,7 +14,11 @@ headless model client.
 2. For every pending Phoenix calendar date, inspect all 125 public sources.
    Use direct pages, RSS/Atom, sitemaps, and public records; do not bypass
    paywalls, robots rules, CAPTCHAs, or access controls.
-3. Keep only date-verifiable Arizona commercial-property/facility events and
+3. Target at least 30 unique article leads per calendar day. Define uniqueness
+   by the canonical source URL plus the normalized company/property, event, and
+   publication date. Continue through all 125 sources and any retryable source
+   work needed to reach the target. Keep only date-verifiable Arizona
+   commercial-property/facility events and
    record the source URL, original publication date, company/property, signal,
    score, priority, filter reason, and service angle. Never guess contact data.
 4. Save a validated article-lead CSV, an audit log, a `sales_handoff.json`, and
@@ -29,8 +33,12 @@ headless model client.
    Structure it as an HTML table with: article/source link, publication date,
    company/property, event/signal, location, score/priority, service angle,
    contact name/title/email/phone/LinkedIn when verified, and the Pipedrive
-   Lead ID/status. Never use `jordan@aethercommercialcleaning.us` for this
+   Lead ID/status, plus the achieved count and any shortfall versus 30. Never
+   use `jordan@aethercommercialcleaning.us` for this
    internal report; Jordan is reserved for Warmy prospect campaigns.
+   Never fabricate, duplicate, or downgrade qualification standards just to
+   reach 30; if fewer than 30 valid unique leads exist, report the shortfall
+   clearly to Jon and leave the run retryable where more source work is possible.
 7. Only after Gmail confirms delivery may the run record its sent marker. A
    failed or ambiguous send remains retryable and must not be claimed as sent.
 
